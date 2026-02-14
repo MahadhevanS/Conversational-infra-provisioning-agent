@@ -290,7 +290,6 @@
 // };
 
 // export default ConsoleLayout;
-
 import React, { useState, useEffect } from "react";
 import {
   LexRuntimeV2Client,
@@ -329,13 +328,26 @@ const getIdentityId = async () => {
   return response.IdentityId;
 };
 
-/* ---------------- COMPONENT ---------------- */
+const SLOT_LABELS = {
+  instance_type: "Collecting instance type",
+  region: "Collecting region",
+  environment: "Collecting environment",
+  instance_id: "Collecting instance ID",
+  new_instance_type: "Collecting new instance type",
+};
+
+const INTENT_TITLES = {
+  CreateInfraIntent: "Create Infrastructure",
+  ModifyInfraIntent: "Modify Infrastructure",
+  TerminateInfraIntent: "Terminate Infrastructure",
+  HelloIntent: "Welcome",
+  FallbackIntent: "General Assistance",
+};
 
 const ConsoleLayout = () => {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState("dark");
-
   const [userId, setUserId] = useState(null);
 
   const [messages, setMessages] = useState([]);
@@ -345,15 +357,10 @@ const ConsoleLayout = () => {
   const [inputDisabled, setInputDisabled] = useState(false);
 
   const [conversationName, setConversationName] = useState("New Conversation");
-
   const [showCostDrawer, setShowCostDrawer] = useState(false);
   const [costData, setCostData] = useState(null);
 
-  /* 🔥 NEW STATES */
   const [activeJobId, setActiveJobId] = useState(null);
-  const [isPolling, setIsPolling] = useState(false);
-
-  /* ---------------- EFFECTS ---------------- */
 
   useEffect(() => {
     getIdentityId().then(setUserId);
@@ -363,20 +370,17 @@ const ConsoleLayout = () => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  /* 🔥 POLLING EFFECT */
+  /* ---------------- POLLING ---------------- */
+
   useEffect(() => {
-    if (!activeJobId || isPolling) return;
+    if (!activeJobId) return;
 
-    setIsPolling(true);
-
-    const timeout = setTimeout(() => {
+    const timer = setTimeout(() => {
       pollPlanStatus(activeJobId);
-    }, 30000); // ⏳ WAIT 30 SECONDS
+    }, 30000); // wait 30 sec
 
-    return () => clearTimeout(timeout);
+    return () => clearTimeout(timer);
   }, [activeJobId]);
-
-  /* ---------------- POLL FUNCTION ---------------- */
 
   const pollPlanStatus = async (jobId) => {
     try {
@@ -386,32 +390,28 @@ const ConsoleLayout = () => {
       const data = await res.json();
 
       if (data.status === "COMPLETED") {
-        setMessages((prev) => [
+        setMessages(prev => [
           ...prev,
           {
             role: "bot",
-            text: `✅ Terraform Plan Ready:\n\n${data.result.slice(0, 1500)}`,
-          },
+            text: `✅ Terraform Plan Ready:\n\n${data.result.slice(0,1500)}`
+          }
         ]);
-        setIsPolling(false);
         setActiveJobId(null);
       } else if (data.status === "FAILED") {
-        setMessages((prev) => [
+        setMessages(prev => [
           ...prev,
           {
             role: "bot",
-            text: `❌ Terraform Plan Failed:\n\n${data.result}`,
-          },
+            text: `❌ Terraform Plan Failed:\n\n${data.result}`
+          }
         ]);
-        setIsPolling(false);
         setActiveJobId(null);
       } else {
-        // If still running → retry after 5 sec
         setTimeout(() => pollPlanStatus(jobId), 5000);
       }
     } catch (err) {
-      console.error(err);
-      setIsPolling(false);
+      console.error("Polling error:", err);
       setActiveJobId(null);
     }
   };
@@ -419,17 +419,14 @@ const ConsoleLayout = () => {
   /* ---------------- SEND MESSAGE ---------------- */
 
   const sendMessage = async (rawText) => {
-    if (sidebarOpen) setSidebarOpen(false);
-
-    const text = rawText.trim();
-    if (!text) return;
+    if (!rawText.trim()) return;
 
     if (!chatStarted) {
       setChatStarted(true);
-      setConversationName(text.slice(0, 40));
+      setConversationName(rawText.slice(0, 40));
     }
 
-    setMessages((prev) => [...prev, { role: "user", text }]);
+    setMessages(prev => [...prev, { role: "user", text: rawText }]);
     setIsTyping(true);
     setBotStatus("CloudCrafter is thinking...");
 
@@ -439,30 +436,63 @@ const ConsoleLayout = () => {
         botAliasId: process.env.REACT_APP_LEX_BOT_ALIAS_ID,
         localeId: "en_US",
         sessionId: userId || "anonymous",
-        text,
+        text: rawText,
       });
 
       const response = await lexClient.send(command);
 
+      console.log("LEX RESPONSE:", response);
+
+      let payload = {};
+      try {
+        payload = JSON.parse(
+          response.sessionState?.sessionAttributes?.ui_payload || "{}"
+        );
+      } catch {}
+
+      const intentName = response.sessionState?.intent?.name;
+      const slotToElicit = response.sessionState?.dialogAction?.slotToElicit;
+
+      if (intentName && INTENT_TITLES[intentName]) {
+        setConversationName(INTENT_TITLES[intentName]);
+      }
+
+      const derivedTopic = slotToElicit
+        ? SLOT_LABELS[slotToElicit] || "Collecting details"
+        : null;
+
       const botMessage =
+        payload.message ||
         response.messages?.map((m) => m.content).join("\n") ||
         "No response";
 
-      setMessages((prev) => [
+      setMessages(prev => [
         ...prev,
-        { role: "bot", text: botMessage },
+        {
+          role: "bot",
+          text: botMessage,
+          topic: derivedTopic,
+          buttons: payload.buttons || null,
+        },
       ]);
 
-      /* 🔥 EXTRACT JOB ID */
+      setInputDisabled(Boolean(payload.ui?.disableInput));
+
+      if (payload.cost) {
+        setCostData(payload.cost);
+        setShowCostDrawer(true);
+      }
+
       const match = botMessage.match(/Job ID:\s*(\S+)/);
       if (match) {
         setActiveJobId(match[1]);
       }
 
     } catch (err) {
-      setMessages((prev) => [
+      console.error(err);
+      setMessages(prev => [
         ...prev,
-        { role: "bot", text: "CloudCrafter is temporarily unavailable." },
+        { role: "bot", text: "CloudCrafter is temporarily unavailable." }
       ]);
     } finally {
       setIsTyping(false);
@@ -470,10 +500,11 @@ const ConsoleLayout = () => {
     }
   };
 
-  /* ---------------- RENDER ---------------- */
+  /* ---------------- UI ---------------- */
 
   return (
-    <div className={`flex flex-col h-screen overflow-hidden bg-[#050505] text-white`}>
+    <div className="flex flex-col h-screen overflow-hidden bg-[#050505] text-white">
+
       <header className="h-[60px] flex justify-between items-center px-6 border-b border-white/10">
         <div className="flex items-center gap-4">
           <button
@@ -487,6 +518,7 @@ const ConsoleLayout = () => {
       </header>
 
       <div className="flex-1 flex relative overflow-hidden">
+
         <Sidebar
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
@@ -509,6 +541,7 @@ const ConsoleLayout = () => {
             disabled={inputDisabled}
             theme={theme}
           />
+
         </main>
 
         <CostDrawer
@@ -517,6 +550,7 @@ const ConsoleLayout = () => {
           theme={theme}
           onClose={() => setShowCostDrawer(false)}
         />
+
       </div>
     </div>
   );
