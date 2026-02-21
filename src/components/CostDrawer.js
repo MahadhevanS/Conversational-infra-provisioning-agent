@@ -46,13 +46,13 @@ const CostDrawer = ({ isOpen, onClose, data, theme }) => {
           </div>
 
           {/* Resources */}
-          {data.resources.map((res, idx) => (
+          {data.resources?.map((res, idx) => (
             <div key={idx} className="space-y-3">
               <h4 className={`text-sm font-semibold ${isDark ? "text-indigo-300" : "text-indigo-700"}`}>
                 {res.name}
               </h4>
 
-              {res.components.map((comp, i) => (
+              {res.components?.map((comp, i) => (
                 <div
                   key={i}
                   className={`flex justify-between items-start p-4 rounded-xl border
