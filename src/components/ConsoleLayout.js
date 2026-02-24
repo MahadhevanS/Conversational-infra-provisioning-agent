@@ -226,19 +226,6 @@ const ConsoleLayout = () => {
           setBotStatus("");
           stopPolling();
 
-          // 🔥 HANDLE PLAN RESULTS DIRECTLY
-          // if (mode === "plan") {
-          //   setMessages((prev) => [
-          //     ...prev,
-          //     {
-          //       role: "bot",
-          //       text: "Terraform plan complete. Review the resources below.",
-          //       type: "PLAN_DISPLAY",
-          //       resources: data.resources,
-          //       structured_plan: data.structured_plan,
-          //     },
-          //   ]);
-          // }
           if (mode === "plan") {
             const planJobId = jobId;
 
@@ -256,17 +243,29 @@ const ConsoleLayout = () => {
           }
 
           if (mode === "apply") {
+            console.log("Apply completed response:", data);
+            
             setMessages((prev) => [
               ...prev,
-              { role: "bot", text: "✅ Deployment completed successfully!" },
+              {
+                role: "bot",
+                text: "✅ Deployment completed successfully!",
+                type: "DEPLOYMENT_SUCCESS",
+                access: data.outputs || {}  // ← Add this
+              },
             ]);
           }
         }else if (data.status === "FAILED") {
           setBotStatus("");
           stopPolling();
-          setMessages((prev) => [
+
+          setMessages(prev => [
             ...prev,
-            { role: "bot", text: `❌ ${mode.toUpperCase()} FAILED\n${data.result}` },
+            {
+              role: "bot",
+              type: "DEPLOYMENT_FAILED",
+              errorData: data.error   // structured object from backend
+            }
           ]);
         } else {
           // Continue polling

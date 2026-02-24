@@ -3,18 +3,13 @@ import React, { useState } from "react";
 const TerraformPlanView = ({ planData, theme, onApprove }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const rawStructured =
-    planData?.resource_changes
-      ? planData
-      : planData?.terraformPlan || planData;
-
   let structured = { resource_changes: [] };
 
   try {
     structured =
-      typeof rawStructured === "string"
-        ? JSON.parse(rawStructured)
-        : rawStructured || { resource_changes: [] };
+      typeof planData === "string"
+        ? JSON.parse(planData)
+        : planData || { resource_changes: [] };
   } catch (e) {
     console.error("Plan parsing error:", e);
   }
@@ -22,11 +17,6 @@ const TerraformPlanView = ({ planData, theme, onApprove }) => {
   const changes = Array.isArray(structured.resource_changes)
     ? structured.resource_changes
     : [];
-
-  // 🔥 Extract ALL resources from planned_values
-  const allResources = Array.isArray(structured.resource_changes)
-  ? structured.resource_changes
-  : [];
 
   const summary = changes.reduce(
     (acc, curr) => {
@@ -41,11 +31,8 @@ const TerraformPlanView = ({ planData, theme, onApprove }) => {
 
   const handleConfirm = () => {
     setIsSubmitting(true);
-    if (onApprove) {
-      onApprove(); // directly call backend trigger
-    }
+    if (onApprove) onApprove();
   };
-
   const handleDiscard = () => {
     // Optional: you can notify Lex here if you want
     window.location.reload(); // simple reset for now
@@ -60,7 +47,7 @@ const TerraformPlanView = ({ planData, theme, onApprove }) => {
         <span className="text-rose-500">{summary.delete} to destroy</span>
       </div>
 
-      {/* RESOURCE LIST (ALWAYS SHOWN) */}
+      {/* RESOURCE LIST */}
       <div
         className={`p-3 rounded-xl border font-mono text-[11px] max-h-64 overflow-y-auto ${
           theme === "dark"
@@ -68,12 +55,12 @@ const TerraformPlanView = ({ planData, theme, onApprove }) => {
             : "bg-white border-black/10 text-zinc-700"
         }`}
       >
-        {allResources.length === 0 ? (
+        {changes.length === 0 ? (
           <div className="py-4 text-center opacity-50 italic">
             No resources found in plan.
           </div>
         ) : (
-          allResources.map((res, i) => {
+          changes.map((res, i) => {
             const action = res.change?.actions?.[0] || "update";
 
             let icon = "(=)";
@@ -91,14 +78,11 @@ const TerraformPlanView = ({ planData, theme, onApprove }) => {
             }
 
             return (
-              <div
-                key={i}
-                className="mb-1.5 flex items-start gap-2 group"
-              >
+              <div key={i} className="mb-1.5 flex items-start gap-2">
                 <span className={`${colorClass} font-bold shrink-0`}>
                   {icon}
                 </span>
-                <span className="truncate opacity-80 group-hover:opacity-100 transition-opacity">
+                <span className="truncate opacity-80">
                   {res.address || `${res.type}.${res.name}`}
                 </span>
               </div>
@@ -107,31 +91,26 @@ const TerraformPlanView = ({ planData, theme, onApprove }) => {
         )}
       </div>
 
-      {/* ACTION BUTTONS */}
-      <div className="flex flex-col gap-2">
-        <button
-          disabled={isSubmitting}
-          onClick={() => handleConfirm()}
-          className={`w-full py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all shadow-lg ${
-            isSubmitting
-              ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
-              : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20 active:scale-[0.98]"
-          }`}
-        >
-          {isSubmitting
-            ? "Initiating Deployment..."
-            : "Confirm & Deploy"}
-        </button>
+      {/* ACTION BUTTON */}
+      <button
+        disabled={isSubmitting}
+        onClick={handleConfirm}
+        className={`w-full py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all shadow-lg ${
+          isSubmitting
+            ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+            : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20 active:scale-[0.98]"
+        }`}
+      >
+        {isSubmitting ? "Initiating Deployment..." : "Confirm & Deploy"}
+      </button>
 
-        {!isSubmitting && (
-          <button
-            onClick={() => handleDiscard()}
-            className="w-full py-2 text-zinc-500 hover:text-rose-400 text-[10px] font-bold uppercase tracking-tighter transition-colors"
-          >
-            Discard Infrastructure Plan
-          </button>
-        )}
-      </div>
+      {!isSubmitting && (
+      <button
+        onClick={() => handleDiscard()}
+        className="w-full py-2 text-zinc-500 hover:text-rose-400 text-[10px] font-bold uppercase tracking-tighter transition-colors"
+      >
+        Discard Infrastructure Plan
+      </button>)}
     </div>
   );
 };

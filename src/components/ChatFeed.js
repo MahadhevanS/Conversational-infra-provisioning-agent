@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import TerraformPlanView from "./TerraformPlanView";
+import DeploymentFailureView from "./DeploymentFailureView";
 
 const ChatFeed = ({
   messages,
@@ -21,15 +22,16 @@ const ChatFeed = ({
     <div className="flex-1 w-full overflow-y-auto px-4 pb-36 scrollbar-thin scrollbar-thumb-zinc-700">
       <div className="flex flex-col gap-5 pt-8">
         {messages.map((msg, idx) => {
-          // 🔥 Parse UI payload safely
+          /* ============================= */
+          /* 🔥 PLAN DETECTION */
+          /* ============================= */
+
           let terraformPlan = null;
 
-          // ✅ NEW: Direct backend structured plan
           if (msg.type === "PLAN_DISPLAY" && msg.structured_plan) {
             terraformPlan = msg.structured_plan;
           }
 
-          // ✅ BACKWARD COMPATIBILITY: Lex ui_payload
           if (!terraformPlan && msg.ui_payload) {
             try {
               const parsed =
@@ -45,6 +47,17 @@ const ChatFeed = ({
             }
           }
 
+          /* ============================= */
+          /* 🔥 DEPLOYMENT SUCCESS DETECTION */
+          /* ============================= */
+
+          let accessPoints = null;
+
+          if (msg.type === "DEPLOYMENT_SUCCESS" && msg.access) {
+            accessPoints = msg.access;
+          }
+
+          
           return (
             <div
               key={idx}
@@ -68,13 +81,6 @@ const ChatFeed = ({
                     msg.role === "user" ? "items-end" : "items-start"
                   }`}
                 >
-                  {/* STEP TOPIC */}
-                  {msg.role === "bot" && msg.topic && (
-                    <div className="mb-1 ml-1 text-[10px] font-bold tracking-widest uppercase text-zinc-400 dark:text-zinc-500">
-                      {msg.topic}
-                    </div>
-                  )}
-
                   {/* MESSAGE BUBBLE */}
                   <div
                     className={`
@@ -91,6 +97,16 @@ const ChatFeed = ({
                   >
                     {msg.text}
 
+                    {/* 🔥 DEPLOYMENT FAILURE VIEW */}
+                    {msg.type === "DEPLOYMENT_FAILED" && msg.errorData && (
+                      <div className="mt-4 w-full">
+                        <DeploymentFailureView
+                          failureData={msg.errorData}
+                          theme={theme}
+                        />
+                      </div>
+                    )}
+                    
                     {/* 🔥 TERRAFORM PLAN VIEW */}
                     {terraformPlan && (
                       <div className="mt-4 w-full">
@@ -99,6 +115,56 @@ const ChatFeed = ({
                           theme={theme}
                           onApprove={msg.onConfirm}
                         />
+                      </div>
+                    )}
+
+                    {/* 🔥 DEPLOYMENT ACCESS PANEL */}
+                    {accessPoints && (
+                      <div className="mt-4 w-full flex flex-col gap-2">
+                        {Object.entries(accessPoints).map(([key, value]) => {
+                          const val = value?.value || value;
+
+                          const isUrl =
+                            typeof val === "string" &&
+                            (val.startsWith("http") ||
+                              val.includes("amazonaws.com"));
+
+                          const finalUrl =
+                            typeof val === "string" && !val.startsWith("http")
+                              ? `http://${val}`
+                              : val;
+
+                          return (
+                            <div
+                              key={key}
+                              className="flex items-center justify-between bg-zinc-200/50 dark:bg-white/5 px-4 py-2 rounded-lg border border-zinc-300 dark:border-white/10"
+                            >
+                              <span className="text-xs font-medium truncate">
+                                {key}
+                              </span>
+
+                              {isUrl ? (
+                                <a
+                                  href={finalUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-indigo-600 dark:text-indigo-400 text-xs hover:underline"
+                                >
+                                  Open
+                                </a>
+                              ) : (
+                                <button
+                                  onClick={() =>
+                                    navigator.clipboard.writeText(val)
+                                  }
+                                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+                                >
+                                  Copy
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -116,13 +182,7 @@ const ChatFeed = ({
                         <button
                           key={i}
                           onClick={() => onOptionClick(btn.value)}
-                          className="
-                            px-4 py-2 text-xs font-medium rounded-full
-                            border border-indigo-500/30 bg-indigo-500/5
-                            text-indigo-600 dark:text-indigo-400
-                            hover:bg-indigo-500/10 hover:border-indigo-500/60
-                            active:scale-95 transition-all
-                          "
+                          className="px-4 py-2 text-xs font-medium rounded-full border border-indigo-500/30 bg-indigo-500/5 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10 hover:border-indigo-500/60 active:scale-95 transition-all"
                         >
                           {btn.text}
                         </button>
@@ -144,11 +204,6 @@ const ChatFeed = ({
               </div>
 
               <div className="px-5 py-3 text-xs font-medium italic bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 border border-zinc-200 dark:border-white/10 rounded-2xl rounded-tl-none flex items-center gap-2">
-                <span className="flex gap-1">
-                  <span className="w-1 h-1 bg-zinc-400 rounded-full animate-bounce"></span>
-                  <span className="w-1 h-1 bg-zinc-400 rounded-full animate-bounce [animation-delay:0.2s]"></span>
-                  <span className="w-1 h-1 bg-zinc-400 rounded-full animate-bounce [animation-delay:0.4s]"></span>
-                </span>
                 {botStatus || "CloudCrafter is thinking"}
               </div>
             </div>
