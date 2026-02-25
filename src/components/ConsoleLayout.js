@@ -243,16 +243,15 @@ const ConsoleLayout = () => {
           }
 
           if (mode === "apply") {
-            console.log("Apply completed response:", data);
-            
-            setMessages((prev) => [
+            setMessages(prev => [
               ...prev,
               {
                 role: "bot",
-                text: "✅ Deployment completed successfully!",
                 type: "DEPLOYMENT_SUCCESS",
-                access: data.outputs || {}  // ← Add this
-              },
+                text: "",
+                outputs: data.outputs || {},
+                access: data.access || []
+              }
             ]);
           }
         }else if (data.status === "FAILED") {

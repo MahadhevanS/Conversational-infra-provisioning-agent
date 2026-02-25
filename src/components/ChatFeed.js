@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import TerraformPlanView from "./TerraformPlanView";
 import DeploymentFailureView from "./DeploymentFailureView";
+import DeploymentSuccessView from "./DeploymentSuccessView";
 
 const ChatFeed = ({
   messages,
@@ -51,10 +52,13 @@ const ChatFeed = ({
           /* 🔥 DEPLOYMENT SUCCESS DETECTION */
           /* ============================= */
 
-          let accessPoints = null;
+          let successData = null;
 
-          if (msg.type === "DEPLOYMENT_SUCCESS" && msg.access) {
-            accessPoints = msg.access;
+          if (msg.type === "DEPLOYMENT_SUCCESS") {
+             successData = {
+              outputs: msg.outputs,
+              access: msg.access
+            };
           }
 
           
@@ -95,8 +99,18 @@ const ChatFeed = ({
                       }
                     `}
                   >
-                    {msg.text}
+                    {msg.type !== "DEPLOYMENT_SUCCESS" && msg.type !== "DEPLOYMENT_FAILED" && msg.text}
 
+                    {/* 🔥 DEPLOYMENT SUCCESS VIEW */}
+                    {msg.type === "DEPLOYMENT_SUCCESS" && successData && (
+                      <div className="mt-4 w-full">
+                        <DeploymentSuccessView
+                          data={successData}
+                          theme={theme}
+                        />
+                      </div>
+                    )}
+                    
                     {/* 🔥 DEPLOYMENT FAILURE VIEW */}
                     {msg.type === "DEPLOYMENT_FAILED" && msg.errorData && (
                       <div className="mt-4 w-full">
@@ -118,10 +132,10 @@ const ChatFeed = ({
                       </div>
                     )}
 
-                    {/* 🔥 DEPLOYMENT ACCESS PANEL */}
-                    {accessPoints && (
+                    {/* 🔥 DEPLOYMENT ACCESS PANEL
+                    {successData && (
                       <div className="mt-4 w-full flex flex-col gap-2">
-                        {Object.entries(accessPoints).map(([key, value]) => {
+                        {Object.entries(successData).map(([key, value]) => {
                           const val = value?.value || value;
 
                           const isUrl =
@@ -166,8 +180,8 @@ const ChatFeed = ({
                           );
                         })}
                       </div>
-                    )}
-                  </div>
+                    )}*/}
+                  </div> 
 
                   {/* QUICK REPLY BUTTONS */}
                   {msg.buttons && (
