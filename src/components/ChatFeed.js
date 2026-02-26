@@ -120,67 +120,36 @@ const ChatFeed = ({
                         />
                       </div>
                     )}
-                    
-                    {/* 🔥 TERRAFORM PLAN VIEW */}
-                    {terraformPlan && (
+
+                    {/* 🔥 COST RESULT VIEW */}
+                    {msg.type === "COST_RESULT" && msg.cost && (
                       <div className="mt-4 w-full">
-                        <TerraformPlanView
-                          planData={terraformPlan}
-                          theme={theme}
-                          onApprove={msg.onConfirm}
-                        />
+                        <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4">
+                          <h3 className="text-sm font-semibold mb-2 text-emerald-400">
+                            Estimated Monthly Cost
+                          </h3>
+
+                          <div className="text-2xl font-bold">
+                            ${msg.cost.monthly_cost?.toFixed(2) || "0.00"}
+                          </div>
+
+                          <div className="text-xs opacity-60 mt-1">
+                            Currency: {msg.cost.currency || "USD"}
+                          </div>
+                        </div>
                       </div>
-                    )}
-
-                    {/* 🔥 DEPLOYMENT ACCESS PANEL
-                    {successData && (
-                      <div className="mt-4 w-full flex flex-col gap-2">
-                        {Object.entries(successData).map(([key, value]) => {
-                          const val = value?.value || value;
-
-                          const isUrl =
-                            typeof val === "string" &&
-                            (val.startsWith("http") ||
-                              val.includes("amazonaws.com"));
-
-                          const finalUrl =
-                            typeof val === "string" && !val.startsWith("http")
-                              ? `http://${val}`
-                              : val;
-
-                          return (
-                            <div
-                              key={key}
-                              className="flex items-center justify-between bg-zinc-200/50 dark:bg-white/5 px-4 py-2 rounded-lg border border-zinc-300 dark:border-white/10"
-                            >
-                              <span className="text-xs font-medium truncate">
-                                {key}
-                              </span>
-
-                              {isUrl ? (
-                                <a
-                                  href={finalUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-indigo-600 dark:text-indigo-400 text-xs hover:underline"
-                                >
-                                  Open
-                                </a>
-                              ) : (
-                                <button
-                                  onClick={() =>
-                                    navigator.clipboard.writeText(val)
-                                  }
-                                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-                                >
-                                  Copy
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}*/}
+                    )}                  
+                    
+                    {terraformPlan && (
+                    <div className="mt-4 w-full">
+                      <TerraformPlanView
+                        planData={terraformPlan}
+                        theme={theme}
+                        onApprove={msg.onApprove}
+                        onCalculateCost={msg.onCalculateCost}
+                        costData={msg.costData}
+                      />
+                    </div>)}
                   </div> 
 
                   {/* QUICK REPLY BUTTONS */}

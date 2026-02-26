@@ -1,6 +1,12 @@
 import React, { useState } from "react";
 
-const TerraformPlanView = ({ planData, theme, onApprove }) => {
+const TerraformPlanView = ({
+  planData,
+  theme,
+  onApprove,
+  onCalculateCost,
+  costData
+}) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   let structured = { resource_changes: [] };
@@ -91,26 +97,57 @@ const TerraformPlanView = ({ planData, theme, onApprove }) => {
         )}
       </div>
 
-      {/* ACTION BUTTON */}
-      <button
-        disabled={isSubmitting}
-        onClick={handleConfirm}
-        className={`w-full py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all shadow-lg ${
-          isSubmitting
-            ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
-            : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20 active:scale-[0.98]"
-        }`}
-      >
-        {isSubmitting ? "Initiating Deployment..." : "Confirm & Deploy"}
-      </button>
+      {/* ACTION SECTION */}
+      <div className="space-y-3">
 
-      {!isSubmitting && (
-      <button
-        onClick={() => handleDiscard()}
-        className="w-full py-2 text-zinc-500 hover:text-rose-400 text-[10px] font-bold uppercase tracking-tighter transition-colors"
-      >
-        Discard Infrastructure Plan
-      </button>)}
+        {/* COST BLOCK */}
+        {costData && (
+          <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 text-center">
+            <div className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">
+              Estimated Monthly Cost
+            </div>
+            <div className="text-xl font-bold mt-1 text-emerald-300">
+              ${costData.monthly_cost?.toFixed(2) || "0.00"}
+            </div>
+            <div className="text-[9px] opacity-60 mt-1">
+              Currency: {costData.currency || "USD"}
+            </div>
+          </div>
+        )}
+
+        {/* PRIMARY BUTTON */}
+        {!costData ? (
+          <button
+            disabled={isSubmitting}
+            onClick={onCalculateCost}
+            className="w-full py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20 active:scale-[0.98]"
+          >
+            Calculate Cost Estimate
+          </button>
+        ) : (
+          <button
+            disabled={isSubmitting}
+            onClick={handleConfirm}
+            className={`w-full py-2.5 rounded-xl font-bold text-xs uppercase tracking-widest transition-all shadow-lg ${
+              isSubmitting
+                ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-500/20 active:scale-[0.98]"
+            }`}
+          >
+            {isSubmitting ? "Initiating Deployment..." : "Approve & Deploy"}
+          </button>
+        )}
+
+        {/* DISCARD */}
+        {!isSubmitting && (
+          <button
+            onClick={handleDiscard}
+            className="w-full py-2 text-zinc-500 hover:text-rose-400 text-[10px] font-bold uppercase tracking-tighter transition-colors"
+          >
+            Discard Infrastructure Plan
+          </button>
+        )}
+      </div>
     </div>
   );
 };

@@ -53,6 +53,38 @@ const ConsoleLayout = () => {
   const planTimeoutRef = useRef(null);
   const applyIntervalRef = useRef(null);
 
+  const triggerCost = async (planJobId) => {
+    if (!planJobId) return;
+
+    try {
+      setBotStatus("Calculating infrastructure cost...");
+
+      const res = await fetch(`${BACKEND_BASE_URL}/cost`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "true"
+        },
+        body: JSON.stringify({ run_id: planJobId }),
+      });
+
+      const data = await res.json();
+
+      if (!data.job_id) {
+        throw new Error("No cost job id returned");
+      }
+
+      pollStatus(data.job_id, "cost",planJobId);
+
+    } catch (err) {
+      setMessages(prev => [
+        ...prev,
+        { role: "bot", text: "❌ Failed to calculate cost." }
+      ]);
+      setBotStatus("");
+    }
+  };
+
   const triggerApply = async (planJobId) => {
     if (!planJobId) return;
 
@@ -209,7 +241,7 @@ const ConsoleLayout = () => {
   /* 🔥 UNIVERSAL POLLER */
   /* ========================================================= */
 
-  const pollStatus = (jobId, mode) => {
+  const pollStatus = (jobId, mode,relatedPlanJobId = null) => {
     if (!jobId) return;
     stopPolling();
     
@@ -237,9 +269,26 @@ const ConsoleLayout = () => {
                 type: "PLAN_DISPLAY",
                 resources: data.resources,
                 structured_plan: data.structured_plan,
-                onConfirm: () => triggerApply(planJobId),
+                planJobId,
+                onCalculateCost: () => triggerCost(planJobId),
+                onApprove: () => triggerApply(planJobId),
+                costData : null,
               },
             ]);
+          }
+
+          if (mode === "cost") {
+            setMessages(prev =>
+              prev.map(msg => {
+                if (msg.type === "PLAN_DISPLAY" && msg.planJobId === relatedPlanJobId) {
+                  return {
+                    ...msg,
+                    costData: data.cost_summary
+                  };
+                }
+                return msg;
+              })
+            );
           }
 
           if (mode === "apply") {
@@ -268,7 +317,7 @@ const ConsoleLayout = () => {
           ]);
         } else {
           // Continue polling
-          if (mode === "plan") {
+          if (mode === "plan" || mode === "cost") {
             planTimeoutRef.current = setTimeout(checkStatus, 3000);
           } else {
             applyIntervalRef.current = setTimeout(checkStatus, 4000);
@@ -313,7 +362,7 @@ const ConsoleLayout = () => {
               onClick={() => setShowCostDrawer(true)}
               className="text-xs bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-full border border-emerald-500/20 hover:bg-emerald-500/20 transition-all"
             >
-              Est. ${costData.total || "0"}
+              Est. ${costData.monthly_cost?.toFixed(2) || "0.00"}
             </button>
           )}
           <div className={`h-2 w-2 rounded-full ${userId ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-zinc-600'}`} />
