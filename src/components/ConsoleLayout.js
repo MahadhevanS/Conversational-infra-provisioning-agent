@@ -8,11 +8,11 @@ import {
   CognitoIdentityClient,
   GetIdCommand,
 } from "@aws-sdk/client-cognito-identity";
-
 import Sidebar from "./Sidebar";
 import ChatFeed from "./ChatFeed";
 import CommandInput from "./CommandInput";
 import CostDrawer from "./CostDrawer";
+import { getUserCredentials} from "../utils/api";
 
 /* ---------------- CONFIG & CLIENTS ---------------- */
 
@@ -55,6 +55,7 @@ const ConsoleLayout = () => {
 
   const triggerCost = async (planJobId) => {
     if (!planJobId) return;
+    const credentials = getUserCredentials();
 
     try {
       setBotStatus("Calculating infrastructure cost...");
@@ -65,7 +66,7 @@ const ConsoleLayout = () => {
           "Content-Type": "application/json",
           "ngrok-skip-browser-warning": "true"
         },
-        body: JSON.stringify({ run_id: planJobId }),
+        body: JSON.stringify({ run_id: planJobId, credentials }),
       });
 
       const data = await res.json();
@@ -87,6 +88,7 @@ const ConsoleLayout = () => {
 
   const triggerApply = async (planJobId) => {
     if (!planJobId) return;
+    const credentials = getUserCredentials();
 
     const blueprint = sessionAttributesRef.current.infra_blueprint
       ? JSON.parse(sessionAttributesRef.current.infra_blueprint)
@@ -111,11 +113,13 @@ const ConsoleLayout = () => {
         },
         body: JSON.stringify({
           job_id: planJobId,
-          infra_blueprint: blueprint
+          infra_blueprint: blueprint,
+          credentials
         }),
       });
 
       const data = await res.json();
+      console.log("APPLY RESPONSE:", data);
 
       if (!data.apply_job_id) {
         throw new Error("No apply_job_id returned");
@@ -166,6 +170,9 @@ const ConsoleLayout = () => {
   const talkToLex = async (text, isSystemEvent = false) => {
     if (!userId) return;
 
+    const creds = getUserCredentials();
+    console.log("DEBUG: Sending creds to Lex:", creds);
+
     if (!isSystemEvent) {
       setMessages((prev) => [...prev, { role: "user", text }]);
       setIsTyping(true);
@@ -184,7 +191,12 @@ const ConsoleLayout = () => {
         localeId: "en_US",
         sessionId: userId,
         text: text,
-        sessionState: { sessionAttributes: sessionAttributesRef.current },
+        sessionState: { 
+          sessionAttributes: { 
+            ...sessionAttributesRef.current,
+            user_creds: JSON.stringify(creds)
+          }
+        }
       });
 
       const response = await lexClient.send(command);
@@ -267,28 +279,31 @@ const ConsoleLayout = () => {
                 role: "bot",
                 text: "Terraform plan complete. Review the resources below.",
                 type: "PLAN_DISPLAY",
-                resources: data.resources,
-                structured_plan: data.structured_plan,
-                planJobId,
+                structured_plan: data.structured_plan,   // ✅ FIXED
+                planJobId: planJobId,
                 onCalculateCost: () => triggerCost(planJobId),
                 onApprove: () => triggerApply(planJobId),
-                costData : null,
+                costData: null,
               },
             ]);
           }
 
           if (mode === "cost") {
+            const costSummary = data.cost_summary;
+
             setMessages(prev =>
               prev.map(msg => {
                 if (msg.type === "PLAN_DISPLAY" && msg.planJobId === relatedPlanJobId) {
                   return {
                     ...msg,
-                    costData: data.cost_summary
+                    costData: costSummary
                   };
                 }
                 return msg;
               })
             );
+
+            setCostData(costSummary);   // optional (for header Est. $ badge)
           }
 
           if (mode === "apply") {

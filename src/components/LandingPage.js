@@ -1,8 +1,40 @@
-import React from "react";
+import React, { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 
 const LandingPage = ({ onStart }) => {
+  const navigate = useNavigate();
+
+  // Read session stored by authLocal.js
+  const session = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("cloudcrafter_session") || "null");
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const aws = session?.aws || {};
+  const userEmail = session?.email || "";
+  const fullName = session?.full_name || "";
+
   return (
     <div className="relative min-h-[100dvh] overflow-hidden bg-black text-white flex items-center justify-center">
+      {/* ✅ Top bar (Profile + Logout) */}
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-3">
+        <div className="hidden sm:block text-right">
+          <p className="text-xs text-white/60">Signed in as</p>
+          <p className="text-sm font-semibold text-white">
+            {fullName ? fullName : userEmail}
+          </p>
+        </div>
+
+        <button
+          onClick={() => navigate("/logout")}
+          className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+        >
+          Logout
+        </button>
+      </div>
 
       {/* 🌌 Animated Nebula */}
       <div className="absolute inset-0 pointer-events-none">
@@ -26,7 +58,6 @@ const LandingPage = ({ onStart }) => {
 
       {/* 🌟 Content */}
       <div className="relative z-10 text-center px-4 sm:px-6 animate-in fade-in slide-in-from-bottom-12 duration-1000 w-full max-w-4xl">
-
         {/* Title */}
         <h1
           className="
@@ -55,6 +86,37 @@ const LandingPage = ({ onStart }) => {
           creation, modification, and cost estimation.
         </p>
 
+        {/* ✅ AWS profile card */}
+        <div className="mt-6 sm:mt-8 mx-auto max-w-2xl rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5 text-left">
+          <p className="text-sm font-semibold text-white/90">Connected AWS Profile</p>
+
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+              <p className="text-white/50 text-xs">AWS Account ID</p>
+              <p className="font-medium">{aws.aws_account_id || "Not set"}</p>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+              <p className="text-white/50 text-xs">Default Region</p>
+              <p className="font-medium">{aws.aws_region || "Not set"}</p>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3 sm:col-span-2">
+              <p className="text-white/50 text-xs">IAM Role ARN</p>
+              <p className="font-medium break-all">{aws.role_arn || "Not set"}</p>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3 sm:col-span-2">
+              <p className="text-white/50 text-xs">External ID</p>
+              <p className="font-medium break-all">{aws.external_id || "—"}</p>
+            </div>
+          </div>
+
+          <p className="mt-3 text-xs text-white/50">
+            (Demo mode: stored in browser localStorage. In production, store securely in backend.)
+          </p>
+        </div>
+
         {/* Divider */}
         <div className="mt-8 sm:mt-10 flex justify-center">
           <div className="h-px w-32 sm:w-40 bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent" />
@@ -62,7 +124,6 @@ const LandingPage = ({ onStart }) => {
 
         {/* CTA Buttons */}
         <div className="mt-8 sm:mt-12 flex flex-col sm:flex-row gap-4 sm:gap-5 justify-center items-center">
-
           {/* Primary CTA */}
           <button
             onClick={onStart}
@@ -90,6 +151,12 @@ const LandingPage = ({ onStart }) => {
 
           {/* Secondary CTA */}
           <button
+            onClick={() =>
+              window.open(
+                "https://developer.hashicorp.com/terraform/docs", // change to your docs link
+                "_blank"
+              )
+            }
             className="
               w-full sm:w-auto
               px-10 sm:px-12 py-3.5 sm:py-4
