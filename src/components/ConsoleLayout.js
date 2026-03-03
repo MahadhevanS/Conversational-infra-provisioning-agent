@@ -12,7 +12,7 @@ import Sidebar from "./Sidebar";
 import ChatFeed from "./ChatFeed";
 import CommandInput from "./CommandInput";
 import CostDrawer from "./CostDrawer";
-import { getUserCredentials} from "../utils/api";
+import { apiFetch, getProjectId } from "../utils/api";
 
 /* ---------------- CONFIG & CLIENTS ---------------- */
 
@@ -55,7 +55,6 @@ const ConsoleLayout = () => {
 
   const triggerCost = async (planJobId) => {
     if (!planJobId) return;
-    const credentials = getUserCredentials();
 
     try {
       setBotStatus("Calculating infrastructure cost...");
@@ -66,7 +65,7 @@ const ConsoleLayout = () => {
           "Content-Type": "application/json",
           "ngrok-skip-browser-warning": "true"
         },
-        body: JSON.stringify({ run_id: planJobId, credentials }),
+        body: JSON.stringify({ run_id: planJobId, project_id: getProjectId() }),
       });
 
       const data = await res.json();
@@ -88,7 +87,6 @@ const ConsoleLayout = () => {
 
   const triggerApply = async (planJobId) => {
     if (!planJobId) return;
-    const credentials = getUserCredentials();
 
     const blueprint = sessionAttributesRef.current.infra_blueprint
       ? JSON.parse(sessionAttributesRef.current.infra_blueprint)
@@ -112,9 +110,9 @@ const ConsoleLayout = () => {
           "ngrok-skip-browser-warning": "true"
         },
         body: JSON.stringify({
+          project_id: getProjectId(),
           job_id: planJobId,
           infra_blueprint: blueprint,
-          credentials
         }),
       });
 
@@ -168,10 +166,9 @@ const ConsoleLayout = () => {
   /* ========================================================= */
 
   const talkToLex = async (text, isSystemEvent = false) => {
-    if (!userId) return;
+    const sessionId = userId || "local-session";
 
-    const creds = getUserCredentials();
-    console.log("DEBUG: Sending creds to Lex:", creds);
+    console.log("DEBUG: Sending sessionId to Lex:", sessionId);
 
     if (!isSystemEvent) {
       setMessages((prev) => [...prev, { role: "user", text }]);
@@ -189,12 +186,11 @@ const ConsoleLayout = () => {
         botId: BOT_ID,
         botAliasId: ALIAS_ID,
         localeId: "en_US",
-        sessionId: userId,
+        sessionId: sessionId,
         text: text,
         sessionState: { 
           sessionAttributes: { 
             ...sessionAttributesRef.current,
-            user_creds: JSON.stringify(creds)
           }
         }
       });
@@ -426,3 +422,4 @@ const ConsoleLayout = () => {
 };
 
 export default ConsoleLayout;
+
