@@ -58,6 +58,78 @@
 //   );
 // }
 
+// import React from "react";
+// import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+
+// import LandingPage from "./components/LandingPage";
+// import ConsoleLayout from "./components/ConsoleLayout";
+// import SignIn from "./pages/SignIn";
+// import SignUp from "./pages/SignUp";
+
+// import { getAuthToken, clearAuthToken } from "./utils/api";
+// import "./App.css";
+
+// /* ---------------- AUTH CHECK ---------------- */
+
+// function isLoggedIn() {
+//   return !!getAuthToken();
+// }
+
+// /* ---------------- Protected Landing Page ---------------- */
+
+// function Home() {
+//   const navigate = useNavigate();
+
+//   if (!isLoggedIn()) {
+//     return <Navigate to="/signin" replace />;
+//   }
+
+//   return (
+//     <div className="min-h-screen bg-[#050505] text-white">
+//       <LandingPage onStart={() => navigate("/console")} />
+//     </div>
+//   );
+// }
+
+// /* ---------------- Protected Console ---------------- */
+
+// function ConsolePage() {
+//   if (!isLoggedIn()) {
+//     return <Navigate to="/signin" replace />;
+//   }
+
+//   return <ConsoleLayout />;
+// }
+
+// /* ---------------- Logout ---------------- */
+
+// function Logout() {
+//   clearAuthToken();
+//   return <Navigate to="/signin" replace />;
+// }
+
+// /* ---------------- APP ROUTES ---------------- */
+
+// export default function App() {
+//   return (
+//     <Routes>
+//       {/* default route */}
+//       <Route path="/" element={<Navigate to="/signin" replace />} />
+
+//       <Route path="/signin" element={<SignIn />} />
+//       <Route path="/signup" element={<SignUp />} />
+
+//       <Route path="/home" element={<Home />} />
+//       <Route path="/console" element={<ConsolePage />} />
+//       <Route path="/logout" element={<Logout />} />
+
+//       {/* fallback */}
+//       <Route path="*" element={<Navigate to="/signin" replace />} />
+//     </Routes>
+//   );
+// }
+
+
 import React from "react";
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 
@@ -75,18 +147,23 @@ function isLoggedIn() {
   return !!getAuthToken();
 }
 
-/* ---------------- Protected Landing Page ---------------- */
+/* ---------------- Public Landing Page ---------------- */
 
-function Home() {
+function PublicLanding() {
   const navigate = useNavigate();
 
-  if (!isLoggedIn()) {
-    return <Navigate to="/signin" replace />;
-  }
+  // 🔥 Smart Routing: If they are logged in, send to console. If not, send to sign in.
+  const handleStart = () => {
+    if (isLoggedIn()) {
+      navigate("/console");
+    } else {
+      navigate("/signin");
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#050505] text-white">
-      <LandingPage onStart={() => navigate("/console")} />
+      <LandingPage onStart={handleStart} />
     </div>
   );
 }
@@ -105,7 +182,8 @@ function ConsolePage() {
 
 function Logout() {
   clearAuthToken();
-  return <Navigate to="/signin" replace />;
+  // 🔥 Redirect to the beautiful public landing page when they log out
+  return <Navigate to="/" replace />; 
 }
 
 /* ---------------- APP ROUTES ---------------- */
@@ -113,18 +191,19 @@ function Logout() {
 export default function App() {
   return (
     <Routes>
-      {/* default route */}
-      <Route path="/" element={<Navigate to="/signin" replace />} />
+      {/* 🔥 Default route is now the Public Landing Page! */}
+      <Route path="/" element={<PublicLanding />} />
 
+      {/* Auth Routes */}
       <Route path="/signin" element={<SignIn />} />
       <Route path="/signup" element={<SignUp />} />
 
-      <Route path="/home" element={<Home />} />
+      {/* Protected Routes */}
       <Route path="/console" element={<ConsolePage />} />
       <Route path="/logout" element={<Logout />} />
 
-      {/* fallback */}
-      <Route path="*" element={<Navigate to="/signin" replace />} />
+      {/* Fallback - catch-all bad URLs and send them home */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
