@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   LexRuntimeV2Client,
   RecognizeTextCommand,
@@ -12,7 +13,7 @@ import Sidebar from "./Sidebar";
 import ChatFeed from "./ChatFeed";
 import CommandInput from "./CommandInput";
 import CostDrawer from "./CostDrawer";
-import { apiFetch, getProjectId } from "../utils/api";
+import { apiFetch } from "../utils/api";
 
 /* ---------------- CONFIG & CLIENTS ---------------- */
 
@@ -20,7 +21,6 @@ const REGION = process.env.REACT_APP_AWS_REGION;
 const BOT_ID = process.env.REACT_APP_LEX_BOT_ID;
 const ALIAS_ID = process.env.REACT_APP_LEX_BOT_ALIAS_ID;
 const POOL_ID = process.env.REACT_APP_COGNITO_IDENTITY_POOL_ID;
-const BACKEND_BASE_URL = "https://unmicrobial-suzie-unapprehendably.ngrok-free.dev";
 
 const lexClient = new LexRuntimeV2Client({
   region: REGION,
@@ -30,22 +30,31 @@ const lexClient = new LexRuntimeV2Client({
   }),
 });
 
+// 🔥 SESSION STORAGE HELPERS
+const getSessionId = () => sessionStorage.getItem("cc_project_id");
+const setSessionId = (id) => id ? sessionStorage.setItem("cc_project_id", id) : sessionStorage.removeItem("cc_project_id");
 
 const ConsoleLayout = () => {
-  /* 🔥 PROTOCOL STATE */
+  const navigate = useNavigate();
+
+  /* 🔥 PROTOCOL & CACHE STATE */
   const sessionAttributesRef = useRef({});
+  const chatCache = useRef({}); 
+  const activeProjectIdRef = useRef(getSessionId()); 
 
   /* ---------------- UI STATE ---------------- */
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState("dark");
   const [userId, setUserId] = useState(null);
 
+  const [activeProjectId, setActiveProjectId] = useState(getSessionId());
+  const [conversationName, setConversationName] = useState("New Conversation");
+
   const [messages, setMessages] = useState([]);
   const [chatStarted, setChatStarted] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [botStatus, setBotStatus] = useState("");
   
-  const [conversationName, setConversationName] = useState("New Conversation");
   const [showCostDrawer, setShowCostDrawer] = useState(false);
   const [costData, setCostData] = useState(null);
 
@@ -53,88 +62,31 @@ const ConsoleLayout = () => {
   const planTimeoutRef = useRef(null);
   const applyIntervalRef = useRef(null);
 
-  const triggerCost = async (planJobId) => {
-    if (!planJobId) return;
-
+  /* 🔥 USER SESSION */
+  const session = useMemo(() => {
     try {
-      setBotStatus("Calculating infrastructure cost...");
+      return JSON.parse(localStorage.getItem("cloudcrafter_session") || "null");
+    } catch {
+      return null;
+    }
+  }, []);
 
-      const res = await fetch(`${BACKEND_BASE_URL}/cost`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "ngrok-skip-browser-warning": "true"
-        },
-        body: JSON.stringify({ run_id: planJobId, project_id: getProjectId() }),
-      });
+  const displayName = session?.full_name || session?.email || "User";
 
-      const data = await res.json();
+  useEffect(() => {
+    activeProjectIdRef.current = activeProjectId;
+  }, [activeProjectId]);
 
-      if (!data.job_id) {
-        throw new Error("No cost job id returned");
+  const updateMessages = useCallback((updater) => {
+    setMessages((prev) => {
+      const newMsgs = typeof updater === "function" ? updater(prev) : updater;
+      if (activeProjectIdRef.current) {
+        chatCache.current[activeProjectIdRef.current] = newMsgs;
       }
+      return newMsgs;
+    });
+  }, []);
 
-      pollStatus(data.job_id, "cost",planJobId);
-
-    } catch (err) {
-      setMessages(prev => [
-        ...prev,
-        { role: "bot", text: "❌ Failed to calculate cost." }
-      ]);
-      setBotStatus("");
-    }
-  };
-
-  const triggerApply = async (planJobId) => {
-    if (!planJobId) return;
-
-    const blueprint = sessionAttributesRef.current.infra_blueprint
-      ? JSON.parse(sessionAttributesRef.current.infra_blueprint)
-      : null;
-
-    if (!blueprint) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", text: "❌ Blueprint missing. Cannot apply." },
-      ]);
-      return;
-    }
-
-    try {
-      setBotStatus("Starting deployment...");
-
-      const res = await fetch(`${BACKEND_BASE_URL}/apply`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "ngrok-skip-browser-warning": "true"
-        },
-        body: JSON.stringify({
-          project_id: getProjectId(),
-          job_id: planJobId,
-          infra_blueprint: blueprint,
-        }),
-      });
-
-      const data = await res.json();
-      console.log("APPLY RESPONSE:", data);
-
-      if (!data.apply_job_id) {
-        throw new Error("No apply_job_id returned");
-      }
-
-      pollStatus(data.apply_job_id, "apply");
-
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", text: "❌ Failed to start deployment." },
-      ]);
-      setBotStatus("");
-    }
-  };
-
-  // Initialize Identity
   useEffect(() => {
     const identityClient = new CognitoIdentityClient({ region: REGION });
     const getId = async () => {
@@ -142,17 +94,142 @@ const ConsoleLayout = () => {
         const res = await identityClient.send(new GetIdCommand({ IdentityPoolId: POOL_ID }));
         setUserId(res.IdentityId);
       } catch (err) {
-        console.error("Identity Error:", err);
         setUserId("anon-" + Math.random().toString(36).substring(7));
       }
     };
     getId();
   }, []);
 
-  // Sync Theme with HTML class
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  /* ---------------- 🔥 HISTORY LOADING LOGIC ---------------- */
+  
+  useEffect(() => {
+    if (activeProjectId) {
+      setSessionId(activeProjectId);
+      loadChatHistory(activeProjectId);
+    } else {
+      setSessionId(null);
+      setMessages([]);
+      setChatStarted(false);
+      setConversationName("New Conversation");
+      sessionAttributesRef.current = {}; 
+    }
+  }, [activeProjectId]);
+
+  const loadChatHistory = async (projId) => {
+    if (chatCache.current[projId]) {
+      setMessages(chatCache.current[projId]);
+      setChatStarted(chatCache.current[projId].length > 0);
+      return;
+    }
+
+    try {
+      const data = await apiFetch(`/chats/${projId}`);
+      if (data.messages) {
+        const sortedMessages = data.messages.sort((a, b) => {
+          return new Date(a.created_at || a.timestamp) - new Date(b.created_at || b.timestamp);
+        });
+
+        const applyStatusMap = {};
+        sortedMessages.forEach(m => {
+          if (m.job_details && m.job_details.job_type === "APPLY" && m.job_details.plan_ref) {
+            applyStatusMap[m.job_details.plan_ref] = m.job_details.status;
+          }
+        });
+
+        const historyMsgs = [];
+
+        sortedMessages.forEach((m) => {
+          const baseMsg = {
+            role: m.sender.toUpperCase() === "USER" ? "user" : "bot",
+            text: m.message_text,
+          };
+
+          if (m.job_details) {
+            const job = m.job_details;
+
+            if (job.job_type === "PLAN" && (job.status === "COMPLETED" || job.status === "DISCARDED")) {
+              
+              if (baseMsg.text) {
+                historyMsgs.push({ role: "bot", text: baseMsg.text });
+              }
+              
+              const planMsg = {
+                role: "bot",
+                text: "Terraform plan complete. Review the resources below.",
+                type: "PLAN_DISPLAY",
+                structured_plan: job.result || { resource_changes: [] }, 
+                planJobId: job.job_id
+              };
+
+              if (job.status === "DISCARDED") {
+                planMsg.planStatus = "DISCARDED";
+              } else if (applyStatusMap[job.job_id] === "COMPLETED") {
+                planMsg.planStatus = "DEPLOYED";
+              } else if (applyStatusMap[job.job_id] === "FAILED") {
+                planMsg.planStatus = "DEPLOYMENT_FAILED";
+              } else {
+                planMsg.planStatus = "NOT_DEPLOYED";
+              }
+              
+              if (job.cost_summary) {
+                planMsg.costData = job.cost_summary;
+              }
+
+              historyMsgs.push(planMsg);
+              return; 
+            } 
+            else if (job.job_type === "APPLY" && job.status === "COMPLETED") {
+              baseMsg.type = "DEPLOYMENT_SUCCESS";
+              baseMsg.outputs = job.result?.outputs || {};
+              baseMsg.access = job.result?.access || [];
+            } 
+            else if (job.status === "FAILED") {
+              baseMsg.type = "DEPLOYMENT_FAILED";
+              baseMsg.errorData = job.error_message || job.error || "An unknown error occurred.";
+            }
+          }
+
+          historyMsgs.push(baseMsg);
+        });
+        
+        const lastCostMsg = historyMsgs.slice().reverse().find(m => m.costData);
+        if (lastCostMsg) {
+          setCostData(lastCostMsg.costData);
+        } else {
+          setCostData(null); 
+        }
+
+        chatCache.current[projId] = historyMsgs;
+        setMessages(historyMsgs);
+        setChatStarted(historyMsgs.length > 0);
+      }
+    } catch (e) {
+      console.error("Failed to load history:", e);
+    }
+  };
+  
+  const handleProjectSelect = (projId, projName, silentSync = false) => {
+    setActiveProjectId(projId);
+    activeProjectIdRef.current = projId; 
+    setConversationName(projName || "New Conversation");
+
+    if (!projId) {
+      setSessionId(null);
+      setMessages([]);
+      setChatStarted(false);
+      sessionAttributesRef.current = {}; 
+    } else {
+      setSessionId(projId);
+    }
+
+    if (!silentSync) {
+      setSidebarOpen(false);
+    }
+  };
 
   const stopPolling = useCallback(() => {
     if (planTimeoutRef.current) clearTimeout(planTimeoutRef.current);
@@ -162,36 +239,231 @@ const ConsoleLayout = () => {
   }, []);
 
   /* ========================================================= */
+  /* 🔥 UNIVERSAL POLLER */
+  /* ========================================================= */
+  const pollStatus = (jobId, mode, relatedPlanJobId = null) => {
+    if (!jobId) return;
+    stopPolling();
+    
+    setBotStatus(mode === "plan" ? "Terraform is planning..." : "Provisioning AWS Resources...");
+
+    const checkStatus = async () => {
+      try {
+        const data = await apiFetch(`/status/${jobId}`, { method: "GET" });
+
+        if (data.status === "COMPLETED") {
+          setBotStatus("");
+          stopPolling();
+
+          if (mode === "plan") {
+            updateMessages((prev) => [
+              ...prev,
+              {
+                role: "bot",
+                text: "Terraform plan complete. Review the resources below.",
+                type: "PLAN_DISPLAY",
+                structured_plan: data.structured_plan,
+                planJobId: jobId,
+                onCalculateCost: () => triggerCost(jobId),
+                onApprove: () => triggerApply(jobId),
+                onDiscard: () => discardPlan(jobId),
+              },
+            ]);
+          }
+
+          if (mode === "cost") {
+            const costSummary = data.cost_summary;
+            updateMessages(prev =>
+              prev.map(msg => (msg.planJobId === relatedPlanJobId ? { ...msg, costData: costSummary } : msg))
+            );
+            setCostData(costSummary);
+          }
+
+          if (mode === "apply") {
+            updateMessages(prev => {
+              const updatedPrev = prev.map(msg => 
+                msg.planJobId === relatedPlanJobId
+                  ? { 
+                      ...msg, 
+                      planStatus: "DEPLOYED", 
+                      onApprove: undefined, 
+                      onCalculateCost: undefined, 
+                      onDiscard: undefined 
+                    }
+                  : msg
+              );
+              
+              return [
+                ...updatedPrev,
+                {
+                  role: "bot",
+                  type: "DEPLOYMENT_SUCCESS",
+                  text: "Deployment completed successfully.",
+                  outputs: data.outputs || {},
+                  access: data.access || []
+                }
+              ];
+            });
+          }
+        } else if (data.status === "FAILED") {
+          setBotStatus("");
+          stopPolling();
+
+          updateMessages(prev => {
+            const updatedPrev = mode === "apply"
+              ? prev.map(msg => 
+                  msg.planJobId === relatedPlanJobId
+                    ? { 
+                        ...msg, 
+                        planStatus: "DEPLOYMENT_FAILED", 
+                        onApprove: undefined, 
+                        onCalculateCost: undefined, 
+                        onDiscard: undefined 
+                      }
+                    : msg
+                )
+              : prev;
+
+            return [
+              ...updatedPrev,
+              { 
+                role: "bot", 
+                type: "DEPLOYMENT_FAILED", 
+                text: "Process failed.", 
+                errorData: data.error || data.error_message || "An unknown deployment error occurred." 
+              }
+            ];
+          });
+        } else {
+          const delay = mode === "apply" ? 4000 : 3000;
+          planTimeoutRef.current = setTimeout(checkStatus, delay);
+        }
+      } catch (err) {
+        setBotStatus("Reconnecting...");
+      }
+    };
+    checkStatus();
+  };
+
+  /* ========================================================= */
+  /* ACTION TRIGGERS */
+  /* ========================================================= */
+  const discardPlan = async (planJobId) => {
+    setCostData(null);
+    
+    updateMessages(prev =>
+      prev.map(msg =>
+        msg.planJobId === planJobId
+          ? { 
+              ...msg, 
+              planStatus: "DISCARDED", 
+              onApprove: undefined,    
+              onCalculateCost: undefined,
+              onDiscard: undefined
+            }
+          : msg
+      )
+    );
+
+    try {
+      await apiFetch(`/jobs/${planJobId}/discard`, { method: "POST" });
+    } catch (e) {
+      console.error("Failed to discard job in DB", e);
+    }
+  };
+
+  const triggerCost = async (planJobId) => {
+    try {
+      setBotStatus("Calculating infrastructure cost...");
+      const data = await apiFetch(`/cost`, {
+        method: "POST",
+        body: JSON.stringify({ run_id: planJobId, project_id: activeProjectIdRef.current }),
+      });
+      pollStatus(data.job_id, "cost", planJobId);
+    } catch (err) {
+      setBotStatus("");
+    }
+  };
+
+  const triggerApply = async (planJobId) => {
+    const blueprint = sessionAttributesRef.current.infra_blueprint ? JSON.parse(sessionAttributesRef.current.infra_blueprint) : null;
+    
+    const payloadBody = { 
+      project_id: activeProjectIdRef.current, 
+      job_id: planJobId 
+    };
+    if (blueprint) payloadBody.infra_blueprint = blueprint;
+
+    try {
+      setBotStatus("Starting deployment...");
+      const data = await apiFetch(`/apply`, {
+        method: "POST",
+        body: JSON.stringify(payloadBody),
+      });
+      
+      apiFetch("/chats", {
+        method: "POST",
+        body: JSON.stringify({ 
+          project_id: activeProjectIdRef.current, 
+          sender: "BOT", 
+          message_text: "Initiating deployment...",
+          job_id: data.apply_job_id 
+        }),
+      }).catch(() => console.error("Failed to save apply message"));
+
+      pollStatus(data.apply_job_id, "apply", planJobId); 
+    } catch (err) {
+      setBotStatus("");
+    }
+  };
+
+  /* ========================================================= */
   /* 🔥 CORE LEX HANDLER */
   /* ========================================================= */
-
   const talkToLex = async (text, isSystemEvent = false) => {
-    const sessionId = userId || "local-session";
-
-    console.log("DEBUG: Sending sessionId to Lex:", sessionId);
+    let currentProjId = activeProjectIdRef.current;
 
     if (!isSystemEvent) {
-      setMessages((prev) => [...prev, { role: "user", text }]);
+      if (!currentProjId) {
+        try {
+          const newProjTitle = text.length > 30 ? text.substring(0, 30) + "..." : text;
+          const projRes = await apiFetch("/projects", {
+            method: "POST",
+            body: JSON.stringify({ project_name: newProjTitle, environment: "development" })
+          });
+          currentProjId = projRes.project_id;
+          handleProjectSelect(currentProjId, projRes.project_name, true);
+        } catch (e) {
+          console.error("Auto-create failed:", e);
+        }
+      }
+
+      updateMessages((prev) => [...prev, { role: "user", text }]);
+      
+      if (currentProjId) {
+        apiFetch("/chats", {
+          method: "POST",
+          body: JSON.stringify({ project_id: currentProjId, sender: "USER", message_text: text }),
+        }).catch(() => {});
+      }
+
       setIsTyping(true);
       setBotStatus("CloudCrafter is thinking...");
-      
-      if (!chatStarted) {
-        setChatStarted(true);
-        setConversationName(text.length > 30 ? text.substring(0, 30) + "..." : text);
-      }
+      setChatStarted(true);
     }
 
     try {
       const command = new RecognizeTextCommand({
-        botId: BOT_ID,
-        botAliasId: ALIAS_ID,
+        botId: BOT_ID, 
+        botAliasId: ALIAS_ID, 
         localeId: "en_US",
-        sessionId: sessionId,
+        sessionId: currentProjId || userId || "local-session",
         text: text,
         sessionState: { 
           sessionAttributes: { 
             ...sessionAttributesRef.current,
-          }
+            "project_id": String(currentProjId)
+          } 
         }
       });
 
@@ -200,43 +472,44 @@ const ConsoleLayout = () => {
       sessionAttributesRef.current = updatedAttrs;
 
       let payload = {};
-      try {
-        payload = JSON.parse(updatedAttrs.ui_payload || "{}");
-      } catch (e) {
-        console.warn("Payload parse error", e);
-      }
+      try { payload = JSON.parse(updatedAttrs.ui_payload || "{}"); } catch (e) {}
 
-      // Cost handling if present in payload
       if (payload.cost) {
         setCostData(payload.cost);
         setShowCostDrawer(true);
       }
 
       const botMessage = payload.message || response.messages?.[0]?.content || "";
+      const currentJobId = payload.job_id || payload.plan_job_id || payload.apply_job_id;
 
-      setMessages((prev) => [
+      updateMessages((prev) => [
         ...prev,
-        {
-          role: "bot",
-          text: botMessage,
-          type: payload.type,
-          ui_payload: updatedAttrs.ui_payload, // 🔥 ADD THIS
+        { 
+          role: "bot", 
+          text: botMessage, 
+          type: payload.type, 
+          ui_payload: updatedAttrs.ui_payload,
+          planJobId: currentJobId 
         },
       ]);
 
-      /* --- Check for Async Jobs --- */
-      if (payload.type === "PLAN_STARTED") {
-        pollStatus(payload.job_id || payload.plan_job_id, "plan");
-      } else if (payload.type === "APPLY_STARTED") {
-        pollStatus(payload.job_id || payload.apply_job_id, "apply");
+      if (botMessage && currentProjId) {
+        apiFetch("/chats", {
+          method: "POST",
+          body: JSON.stringify({ 
+            project_id: currentProjId, 
+            sender: "BOT", 
+            message_text: botMessage,
+            job_id: currentJobId || null 
+          }),
+        }).catch(() => {});
       }
 
+      if (payload.type === "PLAN_STARTED") pollStatus(currentJobId, "plan");
+      else if (payload.type === "APPLY_STARTED") pollStatus(currentJobId, "apply", payload.plan_job_id);
+
     } catch (err) {
-      console.error("Lex Error:", err);
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", text: "⚠️ Connection to cloud controller lost." },
-      ]);
+      updateMessages((prev) => [...prev, { role: "bot", text: "⚠️ Connection lost." }]);
     } finally {
       if (!isSystemEvent) {
         setIsTyping(false);
@@ -245,181 +518,82 @@ const ConsoleLayout = () => {
     }
   };
 
-  /* ========================================================= */
-  /* 🔥 UNIVERSAL POLLER */
-  /* ========================================================= */
-
-  const pollStatus = (jobId, mode,relatedPlanJobId = null) => {
-    if (!jobId) return;
-    stopPolling();
-    
-    setBotStatus(mode === "plan" ? "Terraform is planning..." : "Provisioning AWS Resources...");
-
-    const checkStatus = async () => {
-      try {
-        const res = await fetch(`${BACKEND_BASE_URL}/status/${jobId}`, {
-          headers: { "ngrok-skip-browser-warning": "true" }
-        });
-        const data = await res.json();
-
-        if (data.status === "COMPLETED") {
-          setBotStatus("");
-          stopPolling();
-
-          if (mode === "plan") {
-            const planJobId = jobId;
-
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "bot",
-                text: "Terraform plan complete. Review the resources below.",
-                type: "PLAN_DISPLAY",
-                structured_plan: data.structured_plan,   // ✅ FIXED
-                planJobId: planJobId,
-                onCalculateCost: () => triggerCost(planJobId),
-                onApprove: () => triggerApply(planJobId),
-                costData: null,
-              },
-            ]);
-          }
-
-          if (mode === "cost") {
-            const costSummary = data.cost_summary;
-
-            setMessages(prev =>
-              prev.map(msg => {
-                if (msg.type === "PLAN_DISPLAY" && msg.planJobId === relatedPlanJobId) {
-                  return {
-                    ...msg,
-                    costData: costSummary
-                  };
-                }
-                return msg;
-              })
-            );
-
-            setCostData(costSummary);   // optional (for header Est. $ badge)
-          }
-
-          if (mode === "apply") {
-            setMessages(prev => [
-              ...prev,
-              {
-                role: "bot",
-                type: "DEPLOYMENT_SUCCESS",
-                text: "",
-                outputs: data.outputs || {},
-                access: data.access || []
-              }
-            ]);
-          }
-        }else if (data.status === "FAILED") {
-          setBotStatus("");
-          stopPolling();
-
-          setMessages(prev => [
-            ...prev,
-            {
-              role: "bot",
-              type: "DEPLOYMENT_FAILED",
-              errorData: data.error   // structured object from backend
-            }
-          ]);
-        } else {
-          // Continue polling
-          if (mode === "plan" || mode === "cost") {
-            planTimeoutRef.current = setTimeout(checkStatus, 3000);
-          } else {
-            applyIntervalRef.current = setTimeout(checkStatus, 4000);
-          }
-        }
-
-      } catch (err) {
-        console.error("Poll Error:", err);
-        setBotStatus("Reconnecting to backend...");
-      }
-    };
-
-    checkStatus();
-  };
-
-  /* ========================================================= */
-  /* RENDER */
-  /* ========================================================= */
-
   const containerClass = theme === "dark" ? "bg-[#050505] text-white" : "bg-zinc-50 text-zinc-900";
 
   return (
     <div className={`flex flex-col h-screen overflow-hidden ${containerClass}`}>
-      {/* HEADER */}
       <header className="h-[60px] flex justify-between items-center px-6 border-b border-white/10 shrink-0">
         <div className="flex items-center gap-4">
-          <button 
-            onClick={() => setSidebarOpen(true)}
-            className="p-2 hover:bg-white/5 rounded-lg transition-colors"
-          >
-            ☰
-          </button>
+          <button onClick={() => setSidebarOpen(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors">☰</button>
           <div className="flex flex-col">
             <span className="font-bold text-sm tracking-tight uppercase opacity-50">CloudCrafter v1.0</span>
             <span className="font-medium text-xs truncate max-w-[200px]">{conversationName}</span>
           </div>
         </div>
         
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
+          {/* Cost Drawer Toggle */}
           {costData && (
-            <button 
-              onClick={() => setShowCostDrawer(true)}
-              className="text-xs bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-full border border-emerald-500/20 hover:bg-emerald-500/20 transition-all"
-            >
+            <button onClick={() => setShowCostDrawer(true)} className="text-xs bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-full border border-emerald-500/20 hover:bg-emerald-500/20 transition-all hidden sm:block">
               Est. ${costData.monthly_cost?.toFixed(2) || "0.00"}
             </button>
           )}
-          <div className={`h-2 w-2 rounded-full ${userId ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-zinc-600'}`} />
+
+          {/* 🔥 User Profile & Logout Section */}
+          <div className="flex items-center gap-3 pl-2 sm:pl-4 border-l border-white/10">
+            <div className="hidden sm:flex flex-col text-right">
+              <span className="text-xs font-bold text-zinc-200">{displayName}</span>
+              <span className="text-[10px] text-emerald-400 flex items-center justify-end gap-1.5 mt-0.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+                Connected
+              </span>
+            </div>
+            
+            <div className="h-8 w-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400 font-bold border border-indigo-500/30 uppercase shrink-0">
+              {displayName.charAt(0)}
+            </div>
+            
+            <button 
+              onClick={() => navigate("/logout")}
+              className="p-2 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all ml-1"
+              title="Logout"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+            </button>
+          </div>
         </div>
       </header>
 
       <div className="flex flex-1 relative overflow-hidden">
-        {/* SIDEBAR */}
         <Sidebar
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           onToggleTheme={() => setTheme((p) => (p === "dark" ? "light" : "dark"))}
           currentTheme={theme}
+          activeProjectId={activeProjectId}
+          onSelectProject={handleProjectSelect}
         />
 
-        {/* MAIN CONSOLE */}
         <main className="flex-1 flex flex-col relative min-w-0">
           <ChatFeed
-            messages={messages}
-            isTyping={isTyping}
-            botStatus={botStatus}
-            chatStarted={chatStarted}
-            onOptionClick={(val) => talkToLex(val)}
-            theme={theme}
+            messages={messages} isTyping={isTyping} botStatus={botStatus} chatStarted={chatStarted}
+            onOptionClick={(val) => talkToLex(val)} theme={theme}
           />
 
           <CommandInput
-            onSend={(val) => talkToLex(val)}
-            isTyping={isTyping}
-            chatStarted={chatStarted}
-            disabled={botStatus !== "" && botStatus !== "CloudCrafter is thinking..."}
-            theme={theme}
+            onSend={(val) => talkToLex(val)} isTyping={isTyping} chatStarted={chatStarted}
+            disabled={botStatus !== "" && botStatus !== "CloudCrafter is thinking..."} theme={theme}
           />
         </main>
 
-        {/* COST DRAWER */}
-        <CostDrawer
-          isOpen={showCostDrawer}
-          data={costData}
-          theme={theme}
-          onClose={() => setShowCostDrawer(false)}
-        />
+        <CostDrawer isOpen={showCostDrawer} data={costData} theme={theme} onClose={() => setShowCostDrawer(false)} />
       </div>
     </div>
   );
 };
 
 export default ConsoleLayout;
-
