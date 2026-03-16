@@ -23,17 +23,12 @@ const ChatFeed = ({
     <div className="flex-1 w-full overflow-y-auto px-4 pb-36 scrollbar-thin scrollbar-thumb-zinc-700">
       <div className="flex flex-col gap-5 pt-8">
         {messages.map((msg, idx) => {
-          /* ============================= */
-          /* 🔥 PLAN DETECTION */
-          /* ============================= */
-
           let terraformPlan = null;
 
-          if (msg.type === "PLAN_DISPLAY" && msg.structured_plan) {
-            terraformPlan = msg.structured_plan;
-          }
-
-          if (!terraformPlan && msg.ui_payload) {
+          // 🔥 BULLETPROOF FALLBACK: Force it to be truthy so the card never vanishes!
+          if (msg.type === "PLAN_DISPLAY") {
+            terraformPlan = msg.structured_plan || { resource_changes: [] };
+          } else if (!terraformPlan && msg.ui_payload) {
             try {
               const parsed =
                 typeof msg.ui_payload === "string"
@@ -41,16 +36,12 @@ const ChatFeed = ({
                   : msg.ui_payload;
 
               if (parsed?.type === "PLAN_DISPLAY") {
-                terraformPlan = parsed.terraformPlan;
+                terraformPlan = parsed.terraformPlan || { resource_changes: [] };
               }
             } catch (e) {
               console.error("Failed to parse ui_payload:", e);
             }
           }
-
-          /* ============================= */
-          /* 🔥 DEPLOYMENT SUCCESS DETECTION */
-          /* ============================= */
 
           let successData = null;
 
@@ -61,7 +52,6 @@ const ChatFeed = ({
             };
           }
 
-          
           return (
             <div
               key={idx}
@@ -99,7 +89,9 @@ const ChatFeed = ({
                       }
                     `}
                   >
-                    {msg.type !== "DEPLOYMENT_SUCCESS" && msg.type !== "DEPLOYMENT_FAILED" && msg.text}
+                    {msg.type !== "DEPLOYMENT_SUCCESS" && 
+                     msg.type !== "DEPLOYMENT_FAILED" && 
+                     msg.text}
 
                     {/* 🔥 DEPLOYMENT SUCCESS VIEW */}
                     {msg.type === "DEPLOYMENT_SUCCESS" && successData && (
@@ -140,6 +132,7 @@ const ChatFeed = ({
                       </div>
                     )}                  
                     
+                    {/* 🔥 PLAN CARD RE-ENABLED */}
                     {terraformPlan && (
                     <div className="mt-4 w-full">
                       <TerraformPlanView
@@ -147,7 +140,9 @@ const ChatFeed = ({
                         theme={theme}
                         onApprove={msg.onApprove}
                         onCalculateCost={msg.onCalculateCost}
+                        onDiscard={msg.onDiscard}
                         costData={msg.costData}
+                        planStatus={msg.planStatus}
                       />
                     </div>)}
                   </div> 
