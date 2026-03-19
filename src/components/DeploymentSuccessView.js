@@ -1,6 +1,6 @@
 import React from "react";
 
-const DeploymentSuccessView = ({ data, theme }) => {
+const DeploymentSuccessView = ({ data, theme, mode = "deploy" }) => {
   const outputs = data?.outputs || {};
 
   return (
@@ -11,7 +11,9 @@ const DeploymentSuccessView = ({ data, theme }) => {
     }`}>
       
       <div className="text-emerald-500 font-bold mb-3">
-        ✅ Deployment Successful
+        {mode === "destroy"
+          ? "🧨 Destruction Successful"
+          : "✅ Deployment Successful"}
       </div>
 
       {Object.entries(outputs).map(([key, value]) => {
