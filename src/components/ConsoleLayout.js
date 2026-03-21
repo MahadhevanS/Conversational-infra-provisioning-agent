@@ -14,6 +14,7 @@ import ChatFeed from "./ChatFeed";
 import CommandInput from "./CommandInput";
 import { apiFetch } from "../utils/api";
 import LogPanel from "../pages/LogPanel";
+import NotificationBell from "./NotificationBell";
 
 /* ---------------- CONFIG & CLIENTS ---------------- */
 
@@ -39,6 +40,9 @@ const setSessionId = (id) =>
 const ConsoleLayout = () => {
   const navigate = useNavigate();
 
+  // 🔥 must be inside component
+  const isSendingRef = useRef(false);
+
   const sessionAttributesRef = useRef({});
   const chatCache = useRef({});
   const activeProjectIdRef = useRef(getSessionId());
@@ -57,21 +61,22 @@ const ConsoleLayout = () => {
 
   const [costData, setCostData] = useState(null);
 
-  // ── Log panel state ────────────────────────────────────────────────────────
-  // Per-project log tracking: each project remembers its last job independently.
-  // Shape: { [projectId]: { jobId, mode, status } }
+  // Per-project log tracking
   const projectLogsRef = useRef({});
 
-  const [logPanelOpen, setLogPanelOpen]       = useState(false);
-  const [activeLogJobId, setActiveLogJobId]   = useState(null);
-  const [activeLogMode, setActiveLogMode]     = useState(null);
+  const [logPanelOpen, setLogPanelOpen] = useState(false);
+  const [activeLogJobId, setActiveLogJobId] = useState(null);
+  const [activeLogMode, setActiveLogMode] = useState(null);
   const [activeLogStatus, setActiveLogStatus] = useState(null);
 
   const openLogs = useCallback((jobId, mode, status) => {
     const projId = activeProjectIdRef.current;
-    // Persist this job against the current project
     if (projId && jobId) {
-      projectLogsRef.current[projId] = { jobId, mode, status: status || "RUNNING" };
+      projectLogsRef.current[projId] = {
+        jobId,
+        mode,
+        status: status || "RUNNING",
+      };
     }
     setActiveLogJobId(jobId);
     setActiveLogMode(mode);
@@ -79,14 +84,12 @@ const ConsoleLayout = () => {
     setLogPanelOpen(true);
   }, []);
 
-  // Restore the correct log job when switching projects
   const restoreProjectLogs = useCallback((projId) => {
-    // Always close the panel when switching context — avoids stale logs showing
     setLogPanelOpen(false);
-    // Clear state unconditionally first, then re-populate if this project has a saved job
     setActiveLogJobId(null);
     setActiveLogMode(null);
     setActiveLogStatus(null);
+
     if (projId) {
       const saved = projectLogsRef.current[projId];
       if (saved) {
@@ -126,14 +129,18 @@ const ConsoleLayout = () => {
 
   useEffect(() => {
     const identityClient = new CognitoIdentityClient({ region: REGION });
+
     const getId = async () => {
       try {
-        const res = await identityClient.send(new GetIdCommand({ IdentityPoolId: POOL_ID }));
+        const res = await identityClient.send(
+          new GetIdCommand({ IdentityPoolId: POOL_ID })
+        );
         setUserId(res.IdentityId);
       } catch {
         setUserId("anon-" + Math.random().toString(36).substring(7));
       }
     };
+
     getId();
   }, []);
 
@@ -143,196 +150,198 @@ const ConsoleLayout = () => {
 
   /* ---------------- HISTORY LOADING ---------------- */
 
+  const loadChatHistory = useCallback(
+    async (projId) => {
+      if (chatCache.current[projId]) {
+        setMessages(chatCache.current[projId]);
+        setChatStarted(chatCache.current[projId].length > 0);
+        restoreProjectLogs(projId);
+        return;
+      }
+
+      try {
+        const data = await apiFetch(`/chats/${projId}`);
+
+        if (data.messages) {
+          const sortedMessages = data.messages.sort(
+            (a, b) =>
+              new Date(a.created_at || a.timestamp) -
+              new Date(b.created_at || b.timestamp)
+          );
+
+          const applyStatusMap = {};
+          sortedMessages.forEach((m) => {
+            if (
+              m.job_details &&
+              m.job_details.job_type === "APPLY" &&
+              m.job_details.plan_ref
+            ) {
+              applyStatusMap[m.job_details.plan_ref] = m.job_details.status;
+            }
+          });
+
+          const lastBotMessageWithBlueprint = [...data.messages]
+            .reverse()
+            .find(
+              (m) =>
+                m.sender?.toUpperCase() === "BOT" && m.job_details?.blueprint
+            );
+
+          if (lastBotMessageWithBlueprint) {
+            sessionAttributesRef.current.infra_blueprint = JSON.stringify(
+              lastBotMessageWithBlueprint.job_details.blueprint
+            );
+          }
+
+          const historyMsgs = [];
+
+          sortedMessages.forEach((m) => {
+            const baseMsg = {
+              role: m.sender?.toUpperCase() === "USER" ? "user" : "bot",
+              text: m.message_text,
+            };
+
+            if (m.job_details) {
+              const job = m.job_details;
+
+              if (
+                job.job_type === "PLAN" &&
+                (job.status === "COMPLETED" || job.status === "DISCARDED")
+              ) {
+                if (baseMsg.text) {
+                  historyMsgs.push({ role: "bot", text: baseMsg.text });
+                }
+
+                const planMsg = {
+                  role: "bot",
+                  text: "Terraform plan complete. Review the resources below.",
+                  type: "PLAN_DISPLAY",
+                  structured_plan: job.result || { resource_changes: [] },
+                  planJobId: job.job_id,
+                };
+
+                if (job.status === "DISCARDED") {
+                  planMsg.planStatus = "DISCARDED";
+                } else if (applyStatusMap[job.job_id] === "COMPLETED") {
+                  planMsg.planStatus = "DEPLOYED";
+                } else if (applyStatusMap[job.job_id] === "FAILED") {
+                  planMsg.planStatus = "DEPLOYMENT_FAILED";
+                } else {
+                  planMsg.planStatus = "NOT_DEPLOYED";
+                }
+
+                if (job.cost_summary) {
+                  planMsg.costData = job.cost_summary;
+                }
+
+                historyMsgs.push(planMsg);
+                return;
+              } else if (
+                job.job_type === "APPLY" &&
+                job.status === "COMPLETED"
+              ) {
+                baseMsg.type = "DEPLOYMENT_SUCCESS";
+                baseMsg.outputs = job.result?.outputs || {};
+                baseMsg.access = job.result?.access || [];
+              } else if (
+                job.job_type === "DESTROY" &&
+                job.status === "COMPLETED"
+              ) {
+                historyMsgs.push({ role: "bot", text: baseMsg.text });
+                historyMsgs.push({
+                  role: "bot",
+                  text: "Destruction complete. All resources have been removed.",
+                  type: "PLAN_DISPLAY",
+                  destroyMode: true,
+                  planStatus: "DEPLOYED",
+                  planJobId: job.job_id,
+                  structured_plan: { resource_changes: [] },
+                });
+                return;
+              } else if (
+                job.job_type === "DESTROY" &&
+                job.status === "FAILED"
+              ) {
+                historyMsgs.push({ role: "bot", text: baseMsg.text });
+                historyMsgs.push({
+                  role: "bot",
+                  text: "Destruction failed. Some resources may still exist.",
+                  type: "PLAN_DISPLAY",
+                  destroyMode: true,
+                  planStatus: "DEPLOYMENT_FAILED",
+                  planJobId: job.job_id,
+                  structured_plan: { resource_changes: [] },
+                });
+                historyMsgs.push({
+                  role: "bot",
+                  type: "DEPLOYMENT_FAILED",
+                  text: "Destruction failed.",
+                  errorData:
+                    job.error_message ||
+                    "Manual intervention may be required in the AWS Console.",
+                });
+                return;
+              } else if (job.status === "FAILED") {
+                baseMsg.type = "DEPLOYMENT_FAILED";
+                baseMsg.errorData =
+                  job.error_message || job.error || "An unknown error occurred.";
+              }
+            }
+
+            historyMsgs.push(baseMsg);
+          });
+
+          const lastCostMsg = historyMsgs.slice().reverse().find((m) => m.costData);
+          setCostData(lastCostMsg ? lastCostMsg.costData : null);
+
+          chatCache.current[projId] = historyMsgs;
+          setMessages(historyMsgs);
+          setChatStarted(historyMsgs.length > 0);
+
+          const lastJobMsg = [...historyMsgs]
+            .reverse()
+            .find((m) => m.planJobId && m.type === "PLAN_DISPLAY");
+
+          if (lastJobMsg && projId) {
+            const inferredMode = lastJobMsg.destroyMode ? "destroy" : "plan";
+            const inferredStatus =
+              lastJobMsg.planStatus === "DEPLOYED" ||
+              lastJobMsg.planStatus === "DISCARDED" ||
+              lastJobMsg.planStatus === "DEPLOYMENT_FAILED"
+                ? "COMPLETED"
+                : "RUNNING";
+
+            if (!projectLogsRef.current[projId]) {
+              projectLogsRef.current[projId] = {
+                jobId: lastJobMsg.planJobId,
+                mode: inferredMode,
+                status: inferredStatus,
+              };
+            }
+          }
+
+          restoreProjectLogs(projId);
+        }
+      } catch (e) {
+        console.error("Failed to load history:", e);
+      }
+    },
+    [restoreProjectLogs]
+  );
+
   useEffect(() => {
     if (activeProjectId) {
       setSessionId(activeProjectId);
       loadChatHistory(activeProjectId);
-      // restoreProjectLogs is called at the END of loadChatHistory
-      // after projectLogsRef has been seeded from history.
     } else {
       setSessionId(null);
       setMessages([]);
       setChatStarted(false);
       setConversationName("New Conversation");
       sessionAttributesRef.current = {};
-      // No history to load — clear log panel immediately
       restoreProjectLogs(null);
     }
-  }, [activeProjectId]);
-
-  const loadChatHistory = async (projId) => {
-    if (chatCache.current[projId]) {
-      setMessages(chatCache.current[projId]);
-      setChatStarted(chatCache.current[projId].length > 0);
-      // projectLogsRef already seeded from the first load — just restore
-      restoreProjectLogs(projId);
-      return;
-    }
-
-    try {
-      const data = await apiFetch(`/chats/${projId}`);
-      if (data.messages) {
-        const sortedMessages = data.messages.sort(
-          (a, b) =>
-            new Date(a.created_at || a.timestamp) -
-            new Date(b.created_at || b.timestamp)
-        );
-
-        const applyStatusMap = {};
-        sortedMessages.forEach((m) => {
-          if (
-            m.job_details &&
-            m.job_details.job_type === "APPLY" &&
-            m.job_details.plan_ref
-          ) {
-            applyStatusMap[m.job_details.plan_ref] = m.job_details.status;
-          }
-        });
-
-        const lastBotMessageWithBlueprint = [...data.messages]
-          .reverse()
-          .find((m) => m.sender.toUpperCase() === "BOT" && m.job_details?.blueprint);
-
-        if (lastBotMessageWithBlueprint) {
-          sessionAttributesRef.current.infra_blueprint = JSON.stringify(
-            lastBotMessageWithBlueprint.job_details.blueprint
-          );
-        }
-
-        const historyMsgs = [];
-
-        sortedMessages.forEach((m) => {
-          const baseMsg = {
-            role: m.sender.toUpperCase() === "USER" ? "user" : "bot",
-            text: m.message_text,
-          };
-
-          if (m.job_details) {
-            const job = m.job_details;
-
-            if (
-              job.job_type === "PLAN" &&
-              (job.status === "COMPLETED" || job.status === "DISCARDED")
-            ) {
-              if (baseMsg.text) {
-                historyMsgs.push({ role: "bot", text: baseMsg.text });
-              }
-
-              const planMsg = {
-                role: "bot",
-                text: "Terraform plan complete. Review the resources below.",
-                type: "PLAN_DISPLAY",
-                structured_plan: job.result || { resource_changes: [] },
-                planJobId: job.job_id,
-              };
-
-              if (job.status === "DISCARDED") {
-                planMsg.planStatus = "DISCARDED";
-              } else if (applyStatusMap[job.job_id] === "COMPLETED") {
-                planMsg.planStatus = "DEPLOYED";
-              } else if (applyStatusMap[job.job_id] === "FAILED") {
-                planMsg.planStatus = "DEPLOYMENT_FAILED";
-              } else {
-                planMsg.planStatus = "NOT_DEPLOYED";
-              }
-
-              if (job.cost_summary) {
-                planMsg.costData = job.cost_summary;
-              }
-
-              historyMsgs.push(planMsg);
-              return;
-            } else if (job.job_type === "APPLY" && job.status === "COMPLETED") {
-              baseMsg.type = "DEPLOYMENT_SUCCESS";
-              baseMsg.outputs = job.result?.outputs || {};
-              baseMsg.access = job.result?.access || [];
-            } else if (job.job_type === "DESTROY" && job.status === "COMPLETED") {
-              historyMsgs.push({ role: "bot", text: baseMsg.text });
-              historyMsgs.push({
-                role: "bot",
-                text: "Destruction complete. All resources have been removed.",
-                type: "PLAN_DISPLAY",
-                destroyMode: true,
-                planStatus: "DEPLOYED",
-                planJobId: job.job_id,   // ← needed for View Logs button and projectLogsRef seeding
-                structured_plan: { resource_changes: [] },
-              });
-              return;
-            } else if (job.job_type === "DESTROY" && job.status === "FAILED") {
-              historyMsgs.push({ role: "bot", text: baseMsg.text });
-              historyMsgs.push({
-                role: "bot",
-                text: "Destruction failed. Some resources may still exist.",
-                type: "PLAN_DISPLAY",
-                destroyMode: true,
-                planStatus: "DEPLOYMENT_FAILED",
-                planJobId: job.job_id,   // ← needed for View Logs button and projectLogsRef seeding
-                structured_plan: { resource_changes: [] },
-              });
-              historyMsgs.push({
-                role: "bot",
-                type: "DEPLOYMENT_FAILED",
-                text: "Destruction failed.",
-                errorData: job.error_message || "Manual intervention may be required in the AWS Console.",
-              });
-              return;
-            } else if (job.status === "FAILED") {
-              baseMsg.type = "DEPLOYMENT_FAILED";
-              baseMsg.errorData =
-                job.error_message || job.error || "An unknown error occurred.";
-            }
-          }
-
-          historyMsgs.push(baseMsg);
-        });
-
-        const lastCostMsg = historyMsgs.slice().reverse().find((m) => m.costData);
-        if (lastCostMsg) {
-          setCostData(lastCostMsg.costData);
-        } else {
-          setCostData(null);
-        }
-
-        chatCache.current[projId] = historyMsgs;
-        setMessages(historyMsgs);
-        setChatStarted(historyMsgs.length > 0);
-
-        // Seed projectLogsRef with the most recent job from history so the
-        // top Logs button works correctly for projects loaded from the sidebar
-        // without requiring the user to click "View logs" first.
-        // Find most recent job message — covers plan, apply (via DEPLOYMENT_SUCCESS jobId),
-        // and destroy (now that planJobId is set on destroy history messages)
-        const lastJobMsg = [...historyMsgs].reverse().find(
-          (m) => m.planJobId && m.type === "PLAN_DISPLAY"
-        );
-        if (lastJobMsg && projId) {
-          const inferredMode = lastJobMsg.destroyMode ? "destroy" : "plan";
-          const inferredStatus =
-            lastJobMsg.planStatus === "DEPLOYED" ||
-            lastJobMsg.planStatus === "DISCARDED" ||
-            lastJobMsg.planStatus === "DEPLOYMENT_FAILED"
-              ? "COMPLETED"
-              : "RUNNING";
-          // Only seed if this project doesn't already have a live entry
-          // (live entry = set by openLogs during current session, takes priority)
-          if (!projectLogsRef.current[projId]) {
-            projectLogsRef.current[projId] = {
-              jobId: lastJobMsg.planJobId,
-              mode: inferredMode,
-              status: inferredStatus,
-            };
-          }
-        }
-
-        // Now that projectLogsRef is seeded, restore log panel state
-        // for this project. Called here (not in useEffect) so the seed
-        // is guaranteed to exist before we read it.
-        restoreProjectLogs(projId);
-      }
-    } catch (e) {
-      console.error("Failed to load history:", e);
-    }
-  };
+  }, [activeProjectId, loadChatHistory, restoreProjectLogs]);
 
   const handleProjectSelect = (projId, projName, silentSync = false) => {
     setActiveProjectId(projId);
@@ -348,7 +357,6 @@ const ConsoleLayout = () => {
       setSessionId(projId);
     }
 
-    // Restore this project's last log job (or clear if none)
     restoreProjectLogs(projId);
 
     if (!silentSync) {
@@ -367,234 +375,253 @@ const ConsoleLayout = () => {
   /* UNIVERSAL POLLER                                           */
   /* ========================================================= */
 
-  const pollStatus = (jobId, mode, relatedPlanJobId = null) => {
-    if (!jobId) return;
-    stopPolling();
+  const pollStatus = useCallback(
+    (jobId, mode, relatedPlanJobId = null) => {
+      if (!jobId) return;
 
-    setBotStatus(
-      mode === "plan"
-        ? "Terraform is planning..."
-        : mode === "destroy"
-        ? "Destroying infrastructure..."
-        : "Provisioning AWS Resources..."
-    );
+      stopPolling();
 
-    const checkStatus = async () => {
-      try {
-        const data = await apiFetch(`/status/${jobId}`, { method: "GET" });
+      setBotStatus(
+        mode === "plan"
+          ? "Terraform is planning..."
+          : mode === "destroy"
+          ? "Destroying infrastructure..."
+          : "Provisioning AWS Resources..."
+      );
 
-        if (data.status === "COMPLETED") {
-          setBotStatus("");
-          stopPolling();
-          setActiveLogStatus("COMPLETED");
-          // Update persisted status so it survives project switches
-          const _pid = activeProjectIdRef.current;
-          if (_pid && projectLogsRef.current[_pid]) {
-            projectLogsRef.current[_pid].status = "COMPLETED";
-          }
+      const checkStatus = async () => {
+        try {
+          const data = await apiFetch(`/status/${jobId}`, { method: "GET" });
 
-          if (mode === "plan") {
-            updateMessages((prev) => [
-              ...prev,
-              {
-                role: "bot",
-                text: "Terraform plan complete. Review the resources below.",
-                type: "PLAN_DISPLAY",
-                structured_plan: data.structured_plan,
-                planJobId: jobId,
-                onCalculateCost: () => triggerCost(jobId),
-                onApprove: () => triggerApply(jobId),
-                onDiscard: () => discardPlan(jobId),
-              },
-            ]);
-          }
+          if (data.status === "COMPLETED") {
+            setBotStatus("");
+            stopPolling();
+            setActiveLogStatus("COMPLETED");
 
-          if (mode === "cost") {
-            const costSummary = data.cost_summary;
-            updateMessages((prev) =>
-              prev.map((msg) =>
-                msg.planJobId === relatedPlanJobId
-                  ? { ...msg, costData: costSummary }
-                  : msg
-              )
-            );
-            setCostData(costSummary);
-          }
+            const currentPid = activeProjectIdRef.current;
+            if (currentPid && projectLogsRef.current[currentPid]) {
+              projectLogsRef.current[currentPid].status = "COMPLETED";
+            }
 
-          if (mode === "destroy") {
-            setCostData(null);
+            if (mode === "plan") {
+              updateMessages((prev) => [
+                ...prev,
+                {
+                  role: "bot",
+                  text: "Terraform plan complete. Review the resources below.",
+                  type: "PLAN_DISPLAY",
+                  structured_plan: data.structured_plan,
+                  planJobId: jobId,
+                  onCalculateCost: () => triggerCost(jobId),
+                  onApprove: () => triggerApply(jobId),
+                  onDiscard: () => discardPlan(jobId),
+                },
+              ]);
+            }
 
-            const blueprint = sessionAttributesRef.current.infra_blueprint
-              ? (() => {
-                  try { return JSON.parse(sessionAttributesRef.current.infra_blueprint); }
-                  catch { return null; }
-                })()
-              : null;
-
-            const destroyChanges =
-              blueprint?.components?.map((c) => ({
-                address: `module.${c.service}[0].aws_${c.service}_resource.this`,
-                change: { actions: ["delete"] },
-              })) || [];
-
-            updateMessages((prev) => [
-              ...prev,
-              {
-                role: "bot",
-                text: "Destruction complete. All resources have been removed.",
-                type: "PLAN_DISPLAY",
-                destroyMode: true,
-                planStatus: "DEPLOYED",
-                planJobId: jobId,   // ← makes View Logs button appear on live destroy result
-                structured_plan: { resource_changes: destroyChanges },
-              },
-            ]);
-
-            sessionAttributesRef.current.infra_blueprint = null;
-
-            apiFetch("/chats", {
-              method: "POST",
-              body: JSON.stringify({
-                project_id: activeProjectIdRef.current,
-                sender: "BOT",
-                message_text: "Destruction complete. All resources have been removed.",
-                job_id: jobId,
-              }),
-            }).catch(() => {});
-          }
-
-          if (mode === "apply") {
-            updateMessages((prev) => {
-              const updatedPrev = prev.map((msg) =>
-                msg.planJobId === relatedPlanJobId
-                  ? {
-                      ...msg,
-                      planStatus: "DEPLOYED",
-                      onApprove: undefined,
-                      onCalculateCost: undefined,
-                      onDiscard: undefined,
-                    }
-                  : msg
+            if (mode === "cost") {
+              const costSummary = data.cost_summary;
+              updateMessages((prev) =>
+                prev.map((msg) =>
+                  msg.planJobId === relatedPlanJobId
+                    ? { ...msg, costData: costSummary }
+                    : msg
+                )
               );
+              setCostData(costSummary);
+            }
+
+            if (mode === "destroy") {
+              setCostData(null);
+
+              const blueprint = sessionAttributesRef.current.infra_blueprint
+                ? (() => {
+                    try {
+                      return JSON.parse(
+                        sessionAttributesRef.current.infra_blueprint
+                      );
+                    } catch {
+                      return null;
+                    }
+                  })()
+                : null;
+
+              const destroyChanges =
+                blueprint?.components?.map((c) => ({
+                  address: `module.${c.service}[0].aws_${c.service}_resource.this`,
+                  change: { actions: ["delete"] },
+                })) || [];
+
+              updateMessages((prev) => [
+                ...prev,
+                {
+                  role: "bot",
+                  text: "Destruction complete. All resources have been removed.",
+                  type: "PLAN_DISPLAY",
+                  destroyMode: true,
+                  planStatus: "DEPLOYED",
+                  planJobId: jobId,
+                  structured_plan: { resource_changes: destroyChanges },
+                },
+              ]);
+
+              sessionAttributesRef.current.infra_blueprint = null;
+
+              apiFetch("/chats", {
+                method: "POST",
+                body: JSON.stringify({
+                  project_id: activeProjectIdRef.current,
+                  sender: "BOT",
+                  message_text:
+                    "Destruction complete. All resources have been removed.",
+                  job_id: jobId,
+                }),
+              }).catch(() => {});
+            }
+
+            if (mode === "apply") {
+              updateMessages((prev) => {
+                const updatedPrev = prev.map((msg) =>
+                  msg.planJobId === relatedPlanJobId
+                    ? {
+                        ...msg,
+                        planStatus: "DEPLOYED",
+                        onApprove: undefined,
+                        onCalculateCost: undefined,
+                        onDiscard: undefined,
+                      }
+                    : msg
+                );
+
+                return [
+                  ...updatedPrev,
+                  {
+                    role: "bot",
+                    type: "DEPLOYMENT_SUCCESS",
+                    text: "Deployment completed successfully.",
+                    outputs: data.outputs || {},
+                    access: data.access || [],
+                  },
+                ];
+              });
+
+              apiFetch("/chats", {
+                method: "POST",
+                body: JSON.stringify({
+                  project_id: activeProjectIdRef.current,
+                  sender: "BOT",
+                  message_text: "Deployment completed successfully.",
+                  job_id: jobId,
+                }),
+              }).catch(() => {});
+            }
+          } else if (data.status === "FAILED") {
+            setBotStatus("");
+            stopPolling();
+            setActiveLogStatus("FAILED");
+
+            const currentPid = activeProjectIdRef.current;
+            if (currentPid && projectLogsRef.current[currentPid]) {
+              projectLogsRef.current[currentPid].status = "FAILED";
+            }
+
+            if (mode === "destroy") {
+              const blueprint = sessionAttributesRef.current.infra_blueprint
+                ? (() => {
+                    try {
+                      return JSON.parse(
+                        sessionAttributesRef.current.infra_blueprint
+                      );
+                    } catch {
+                      return null;
+                    }
+                  })()
+                : null;
+
+              const destroyChanges =
+                blueprint?.components?.map((c) => ({
+                  address: `module.${c.service}[0].aws_${c.service}_resource.this`,
+                  change: { actions: ["delete"] },
+                })) || [];
+
+              updateMessages((prev) => [
+                ...prev,
+                {
+                  role: "bot",
+                  text: "Destruction failed. Some resources may still exist.",
+                  type: "PLAN_DISPLAY",
+                  destroyMode: true,
+                  planStatus: "DEPLOYMENT_FAILED",
+                  planJobId: jobId,
+                  structured_plan: { resource_changes: destroyChanges },
+                },
+                {
+                  role: "bot",
+                  type: "DEPLOYMENT_FAILED",
+                  text: "Destruction failed.",
+                  errorData:
+                    data.error ||
+                    "Manual intervention may be required in the AWS Console.",
+                },
+              ]);
+
+              apiFetch("/chats", {
+                method: "POST",
+                body: JSON.stringify({
+                  project_id: activeProjectIdRef.current,
+                  sender: "BOT",
+                  message_text:
+                    "Destruction failed. Manual intervention may be required.",
+                  job_id: jobId,
+                }),
+              }).catch(() => {});
+
+              return;
+            }
+
+            updateMessages((prev) => {
+              const updatedPrev =
+                mode === "apply"
+                  ? prev.map((msg) =>
+                      msg.planJobId === relatedPlanJobId
+                        ? {
+                            ...msg,
+                            planStatus: "DEPLOYMENT_FAILED",
+                            onApprove: undefined,
+                            onCalculateCost: undefined,
+                            onDiscard: undefined,
+                          }
+                        : msg
+                    )
+                  : prev;
+
               return [
                 ...updatedPrev,
                 {
                   role: "bot",
-                  type: "DEPLOYMENT_SUCCESS",
-                  text: "Deployment completed successfully.",
-                  outputs: data.outputs || {},
-                  access: data.access || [],
+                  type: "DEPLOYMENT_FAILED",
+                  text: "Process failed.",
+                  errorData:
+                    data.error ||
+                    data.error_message ||
+                    "An unknown deployment error occurred.",
                 },
               ];
             });
-
-            apiFetch("/chats", {
-              method: "POST",
-              body: JSON.stringify({
-                project_id: activeProjectIdRef.current,
-                sender: "BOT",
-                message_text: "Deployment completed successfully.",
-                job_id: jobId,
-              }),
-            }).catch(() => {});
+          } else {
+            const delay = mode === "apply" || mode === "destroy" ? 4000 : 3000;
+            planTimeoutRef.current = setTimeout(checkStatus, delay);
           }
-
-        } else if (data.status === "FAILED") {
-          setBotStatus("");
-          stopPolling();
-          setActiveLogStatus("FAILED");
-          // Update persisted status so it survives project switches
-          const _pid2 = activeProjectIdRef.current;
-          if (_pid2 && projectLogsRef.current[_pid2]) {
-            projectLogsRef.current[_pid2].status = "FAILED";
-          }
-
-          if (mode === "destroy") {
-            const blueprint = sessionAttributesRef.current.infra_blueprint
-              ? (() => {
-                  try { return JSON.parse(sessionAttributesRef.current.infra_blueprint); }
-                  catch { return null; }
-                })()
-              : null;
-
-            const destroyChanges =
-              blueprint?.components?.map((c) => ({
-                address: `module.${c.service}[0].aws_${c.service}_resource.this`,
-                change: { actions: ["delete"] },
-              })) || [];
-
-            updateMessages((prev) => [
-              ...prev,
-              {
-                role: "bot",
-                text: "Destruction failed. Some resources may still exist.",
-                type: "PLAN_DISPLAY",
-                destroyMode: true,
-                planStatus: "DEPLOYMENT_FAILED",
-                planJobId: jobId,   // ← makes View Logs button appear on live destroy failure
-                structured_plan: { resource_changes: destroyChanges },
-              },
-              {
-                role: "bot",
-                type: "DEPLOYMENT_FAILED",
-                text: "Destruction failed.",
-                errorData: data.error || "Manual intervention may be required in the AWS Console.",
-              },
-            ]);
-
-            apiFetch("/chats", {
-              method: "POST",
-              body: JSON.stringify({
-                project_id: activeProjectIdRef.current,
-                sender: "BOT",
-                message_text: "Destruction failed. Manual intervention may be required.",
-                job_id: jobId,
-              }),
-            }).catch(() => {});
-            return;
-          }
-
-          updateMessages((prev) => {
-            const updatedPrev =
-              mode === "apply"
-                ? prev.map((msg) =>
-                    msg.planJobId === relatedPlanJobId
-                      ? {
-                          ...msg,
-                          planStatus: "DEPLOYMENT_FAILED",
-                          onApprove: undefined,
-                          onCalculateCost: undefined,
-                          onDiscard: undefined,
-                        }
-                      : msg
-                  )
-                : prev;
-
-            return [
-              ...updatedPrev,
-              {
-                role: "bot",
-                type: "DEPLOYMENT_FAILED",
-                text: "Process failed.",
-                errorData:
-                  data.error ||
-                  data.error_message ||
-                  "An unknown deployment error occurred.",
-              },
-            ];
-          });
-        } else {
-          const delay = mode === "apply" || mode === "destroy" ? 4000 : 3000;
-          planTimeoutRef.current = setTimeout(checkStatus, delay);
+        } catch {
+          setBotStatus("Reconnecting...");
+          planTimeoutRef.current = setTimeout(checkStatus, 5000);
         }
-      } catch {
-        setBotStatus("Reconnecting...");
-        planTimeoutRef.current = setTimeout(checkStatus, 5000);
-      }
-    };
+      };
 
-    checkStatus();
-  };
+      checkStatus();
+    },
+    [stopPolling, updateMessages]
+  );
 
   /* ========================================================= */
   /* ACTION TRIGGERS                                            */
@@ -602,6 +629,7 @@ const ConsoleLayout = () => {
 
   const discardPlan = async (planJobId) => {
     setCostData(null);
+
     updateMessages((prev) =>
       prev.map((msg) =>
         msg.planJobId === planJobId
@@ -615,6 +643,7 @@ const ConsoleLayout = () => {
           : msg
       )
     );
+
     try {
       await apiFetch(`/jobs/${planJobId}/discard`, { method: "POST" });
     } catch (e) {
@@ -625,6 +654,7 @@ const ConsoleLayout = () => {
   const triggerCost = async (planJobId) => {
     try {
       setBotStatus("Calculating infrastructure cost...");
+
       const data = await apiFetch(`/cost`, {
         method: "POST",
         body: JSON.stringify({
@@ -632,6 +662,7 @@ const ConsoleLayout = () => {
           project_id: activeProjectIdRef.current,
         }),
       });
+
       pollStatus(data.job_id, "cost", planJobId);
     } catch {
       setBotStatus("");
@@ -641,8 +672,11 @@ const ConsoleLayout = () => {
   const triggerApply = async (planJobId) => {
     const blueprint = sessionAttributesRef.current.infra_blueprint
       ? (() => {
-          try { return JSON.parse(sessionAttributesRef.current.infra_blueprint); }
-          catch { return null; }
+          try {
+            return JSON.parse(sessionAttributesRef.current.infra_blueprint);
+          } catch {
+            return null;
+          }
         })()
       : null;
 
@@ -650,10 +684,12 @@ const ConsoleLayout = () => {
       project_id: activeProjectIdRef.current,
       job_id: planJobId,
     };
+
     if (blueprint) payloadBody.infra_blueprint = blueprint;
 
     try {
       setBotStatus("Starting deployment...");
+
       const data = await apiFetch(`/apply`, {
         method: "POST",
         body: JSON.stringify(payloadBody),
@@ -681,52 +717,59 @@ const ConsoleLayout = () => {
   /* ========================================================= */
 
   const talkToLex = async (text, isSystemEvent = false) => {
-    let currentProjId = activeProjectIdRef.current;
-
+    if (isSendingRef.current && !isSystemEvent) return;
     if (!isSystemEvent) {
-      if (!currentProjId) {
-        try {
-          const newProjTitle =
-            text.length > 30 ? text.substring(0, 30) + "..." : text;
-          const projRes = await apiFetch("/projects", {
-            method: "POST",
-            body: JSON.stringify({
-              project_name: newProjTitle,
-              environment: "development",
-            }),
-          });
-          currentProjId = projRes.project_id;
-          handleProjectSelect(currentProjId, projRes.project_name, true);
-        } catch (e) {
-          console.error("Auto-create failed:", e);
-        }
-      }
-
-      updateMessages((prev) => [...prev, { role: "user", text }]);
-
-      if (currentProjId) {
-        apiFetch("/chats", {
-          method: "POST",
-          body: JSON.stringify({
-            project_id: currentProjId,
-            sender: "USER",
-            message_text: text,
-          }),
-        }).catch(() => {});
-      }
-
-      setIsTyping(true);
-      setBotStatus("CloudCrafter is thinking...");
-      setChatStarted(true);
+      isSendingRef.current = true;
     }
 
+    let currentProjId = activeProjectIdRef.current;
+
     try {
+      if (!isSystemEvent) {
+        if (!currentProjId) {
+          try {
+            const newProjTitle =
+              text.length > 30 ? text.substring(0, 30) + "..." : text;
+
+            const projRes = await apiFetch("/projects", {
+              method: "POST",
+              body: JSON.stringify({
+                project_name: newProjTitle,
+                environment: "development",
+              }),
+            });
+
+            currentProjId = projRes.project_id;
+            handleProjectSelect(currentProjId, projRes.project_name, true);
+          } catch (e) {
+            console.error("Auto-create failed:", e);
+          }
+        }
+
+        updateMessages((prev) => [...prev, { role: "user", text }]);
+
+        if (currentProjId) {
+          apiFetch("/chats", {
+            method: "POST",
+            body: JSON.stringify({
+              project_id: currentProjId,
+              sender: "USER",
+              message_text: text,
+            }),
+          }).catch(() => {});
+        }
+
+        setIsTyping(true);
+        setBotStatus("CloudCrafter is thinking...");
+        setChatStarted(true);
+      }
+
       const command = new RecognizeTextCommand({
         botId: BOT_ID,
         botAliasId: ALIAS_ID,
         localeId: "en_US",
         sessionId: currentProjId || userId || "local-session",
-        text: text,
+        text,
         sessionState: {
           sessionAttributes: {
             ...sessionAttributesRef.current,
@@ -742,7 +785,9 @@ const ConsoleLayout = () => {
       let payload = {};
       try {
         payload = JSON.parse(updatedAttrs.ui_payload || "{}");
-      } catch {}
+      } catch {
+        payload = {};
+      }
 
       if (payload.cost) {
         setCostData(payload.cost);
@@ -800,13 +845,19 @@ const ConsoleLayout = () => {
           }),
         }).catch(() => {});
       }
-    } catch {
+    } catch (error) {
+      console.error("talkToLex failed:", error);
+
       updateMessages((prev) => [
         ...prev,
-        { role: "bot", text: "⚠️ Connection lost." },
+        {
+          role: "bot",
+          text: `⚠️ Connection lost. ${error?.message || "Unknown error"}`,
+        },
       ]);
     } finally {
       if (!isSystemEvent) {
+        isSendingRef.current = false;
         setIsTyping(false);
         setBotStatus("");
       }
@@ -843,15 +894,11 @@ const ConsoleLayout = () => {
             </button>
           )}
 
-          {/* Logs toggle button — always visible, styled by state */}
           <button
             onClick={() => {
               if (logPanelOpen) {
-                // Closing — just close
                 setLogPanelOpen(false);
               } else {
-                // Opening — restore this project's logs before showing the panel
-                // so the top button always shows the current project's job, not a stale one
                 const projId = activeProjectIdRef.current;
                 const saved = projId ? projectLogsRef.current[projId] : null;
                 if (saved) {
@@ -863,14 +910,24 @@ const ConsoleLayout = () => {
               }
             }}
             className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-all hidden sm:flex
-              ${logPanelOpen
-                ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/30"
-                : activeLogJobId
+              ${
+                logPanelOpen
+                  ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/30"
+                  : activeLogJobId
                   ? "bg-white/5 text-zinc-400 border-white/10 hover:text-zinc-200 hover:bg-white/10"
-                  : "bg-white/5 text-zinc-600 border-white/5 cursor-default opacity-50"}`}
+                  : "bg-white/5 text-zinc-600 border-white/5 cursor-default opacity-50"
+              }`}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <polyline points="4 17 10 11 4 5" />
               <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
@@ -880,9 +937,13 @@ const ConsoleLayout = () => {
             )}
           </button>
 
+          <NotificationBell />
+
           <div className="flex items-center gap-3 pl-2 sm:pl-4 border-l border-white/10">
             <div className="hidden sm:flex flex-col text-right">
-              <span className="text-xs font-bold text-zinc-200">{displayName}</span>
+              <span className="text-xs font-bold text-zinc-200">
+                {displayName}
+              </span>
               <span className="text-[10px] text-emerald-400 flex items-center justify-end gap-1.5 mt-0.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
                 Connected
@@ -898,8 +959,16 @@ const ConsoleLayout = () => {
               className="p-2 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all ml-1"
               title="Logout"
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
                 <polyline points="16 17 21 12 16 7"></polyline>
                 <line x1="21" y1="12" x2="9" y2="12"></line>
@@ -910,7 +979,6 @@ const ConsoleLayout = () => {
       </header>
 
       <div className="flex flex-1 relative overflow-hidden">
-        {/* Single LogPanel instance */}
         <LogPanel
           isOpen={logPanelOpen}
           onClose={() => setLogPanelOpen(false)}
@@ -944,10 +1012,7 @@ const ConsoleLayout = () => {
             onSend={(val) => talkToLex(val)}
             isTyping={isTyping}
             chatStarted={chatStarted}
-            disabled={
-              botStatus !== "" &&
-              botStatus !== "CloudCrafter is thinking..."
-            }
+            disabled={isTyping}
             theme={theme}
           />
         </main>
