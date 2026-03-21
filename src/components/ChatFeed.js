@@ -166,6 +166,8 @@ const ChatFeed = ({
                         <div className="mt-4 w-full">
                           <DeploymentFailureView
                             failureData={msg.errorData}
+                            aiAnalysis={msg.aiAnalysis || null}
+                            isAiLoading={msg.isAiLoading || false}
                             theme={theme}
                           />
                           {onViewLogs && msg.jobId && (
