@@ -12,6 +12,7 @@ export default function SignUp() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [roleArn, setRoleArn] = useState("");
   const [externalId, setExternalId] = useState("");
+  const [role, setRole] = useState("admin"); // Default role
   
   // UI State
   const [errorMsg, setErrorMsg] = useState("");
@@ -19,7 +20,7 @@ export default function SignUp() {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // 🔥 Real-time Validation Checks
+  // Real-time Validation Checks
   const isNameInvalid = fullName.length > 0 && fullName.length <= 1;
   const isEmailInvalid = email.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const isPasswordInvalid = password.length > 0 && password.length < 6;
@@ -54,6 +55,7 @@ export default function SignUp() {
           password,
           role_arn: roleArn,
           external_id: externalId || null,
+          role: role, 
         }),
       });
 
@@ -66,7 +68,7 @@ export default function SignUp() {
   };
 
   // ==========================================
-  // UI: SUCCESS STATE ("CHECK YOUR EMAIL")
+  // UI: SUCCESS STATE
   // ==========================================
   if (isSubmitted) {
     return (
@@ -96,7 +98,7 @@ export default function SignUp() {
   // UI: SIGN UP FORM
   // ==========================================
   return (
-    <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center px-4 relative overflow-hidden">
+    <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center px-4 relative overflow-hidden py-12">
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-indigo-500/10 rounded-full blur-[120px] pointer-events-none" />
 
       <div className="w-full max-w-md p-8 rounded-2xl bg-white/[0.02] border border-white/10 backdrop-blur-xl shadow-2xl relative z-10">
@@ -117,6 +119,30 @@ export default function SignUp() {
         <form onSubmit={onSubmit} className="space-y-5">
           <div className="space-y-4">
             
+            {/* 🔥 NEW: Simple Role Selection Dropdown */}
+            <div className="flex flex-col gap-2">
+              <label htmlFor="role" className="text-sm font-medium text-zinc-300 ml-1">
+                Select your role :
+              </label>
+              <div className="relative">
+                <select
+                  id="role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  className="w-full p-3.5 rounded-xl bg-black/40 border border-white/10 text-white focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all appearance-none cursor-pointer"
+                >
+                  <option value="admin" className="bg-[#0f0f13]">Admin</option>
+                  <option value="cloud_architect" className="bg-[#0f0f13]">Cloud Architect</option>
+                </select>
+                {/* Custom Dropdown Arrow to keep it looking clean */}
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-zinc-500">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+            
             {/* Full Name */}
             <div>
               <input
@@ -126,7 +152,6 @@ export default function SignUp() {
                 onChange={(e) => setFullName(e.target.value)}
                 required
               />
-              {isNameInvalid && <p className="text-red-400 text-xs mt-1.5 ml-1 animate-in fade-in">Name is too short.</p>}
             </div>
 
             {/* Email */}
@@ -139,7 +164,6 @@ export default function SignUp() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
               />
-              {isEmailInvalid && <p className="text-red-400 text-xs mt-1.5 ml-1 animate-in fade-in">Please enter a valid email address.</p>}
             </div>
 
             {/* Password */}
@@ -165,7 +189,6 @@ export default function SignUp() {
                   )}
                 </button>
               </div>
-              {isPasswordInvalid && <p className="text-red-400 text-xs mt-1.5 ml-1 animate-in fade-in">Password must be at least 6 characters.</p>}
             </div>
 
             {/* Confirm Password */}
@@ -184,7 +207,6 @@ export default function SignUp() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
               />
-              {isMatchInvalid && <p className="text-red-400 text-xs mt-1.5 ml-1 animate-in fade-in">Passwords do not match.</p>}
             </div>
 
             {/* Role ARN */}
@@ -196,9 +218,7 @@ export default function SignUp() {
                 onChange={(e) => setRoleArn(e.target.value)}
                 required
               />
-              {isArnInvalid ? (
-                <p className="text-red-400 text-xs mt-1.5 ml-1 animate-in fade-in">Must start with 'arn:aws:iam::' and contain ':role/'</p>
-              ) : (
+              {!isArnInvalid && (
                 <p className="text-[11px] text-zinc-500 mt-1.5 ml-1">Format: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME</p>
               )}
             </div>
@@ -206,7 +226,7 @@ export default function SignUp() {
             {/* External ID */}
             <input
               className="w-full p-3.5 rounded-xl bg-black/40 border border-white/10 placeholder:text-zinc-500 text-white focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all"
-              placeholder="External ID (Optional, but recommended)"
+              placeholder="External ID (Optional)"
               value={externalId}
               onChange={(e) => setExternalId(e.target.value)}
             />
@@ -217,17 +237,7 @@ export default function SignUp() {
             disabled={!canSubmit || isLoading}
             className="w-full bg-white text-black py-3.5 mt-2 rounded-xl font-semibold hover:bg-zinc-200 focus:outline-none focus:ring-2 focus:ring-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
           >
-            {isLoading ? (
-              <>
-                <svg className="animate-spin h-5 w-5 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Creating Account...
-              </>
-            ) : (
-              "Create Account"
-            )}
+            {isLoading ? "Creating Account..." : "Create Account"}
           </button>
         </form>
 

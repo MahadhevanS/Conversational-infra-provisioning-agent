@@ -9,12 +9,17 @@ import {
   CognitoIdentityClient,
   GetIdCommand,
 } from "@aws-sdk/client-cognito-identity";
+
 import Sidebar from "./Sidebar";
 import ChatFeed from "./ChatFeed";
 import CommandInput from "./CommandInput";
 import { apiFetch } from "../utils/api";
 import LogPanel from "../pages/LogPanel";
 import NotificationBell from "./NotificationBell";
+
+// 🔥 NEW: Import our Dashboard components
+import ProjectDashboard from "../pages/ProjectDashboard";
+import CreateProjectModal from "../pages/CreateProjectModal";
 
 /* ---------------- CONFIG & CLIENTS ---------------- */
 
@@ -41,7 +46,6 @@ const ConsoleLayout = () => {
   const navigate = useNavigate();
 
   const isSendingRef = useRef(false);
-
   const sessionAttributesRef = useRef({});
   const chatCache = useRef({});
   const activeProjectIdRef = useRef(getSessionId());
@@ -67,6 +71,11 @@ const ConsoleLayout = () => {
   const [activeLogJobId, setActiveLogJobId] = useState(null);
   const [activeLogMode, setActiveLogMode] = useState(null);
   const [activeLogStatus, setActiveLogStatus] = useState(null);
+
+  // 🔥 NEW: Dashboard & Modal State
+  const [projects, setProjects] = useState([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const openLogs = useCallback((jobId, mode, status) => {
     const projId = activeProjectIdRef.current;
@@ -102,19 +111,32 @@ const ConsoleLayout = () => {
   const planTimeoutRef = useRef(null);
   const applyIntervalRef = useRef(null);
 
+  // 1. Get the session safely
   const session = useMemo(() => {
     try {
-      return JSON.parse(localStorage.getItem("cloudcrafter_session") || "null");
+      const data = localStorage.getItem("cloudcrafter_session");
+      // Prevent parsing the literal string "null"
+      return data && data !== "null" ? JSON.parse(data) : null; 
     } catch {
       return null;
     }
   }, []);
 
+  // 🔥 2. THE AUTH GUARD: Redirect them immediately if they aren't logged in
+  useEffect(() => {
+    if (!session) {
+      console.warn("No active session. Redirecting to login...");
+      navigate("/signin"); 
+    }
+  }, [session, navigate]);
+
   const displayName = session?.full_name || session?.email || "User";
+  const userRole = session?.role; 
 
   useEffect(() => {
     activeProjectIdRef.current = activeProjectId;
   }, [activeProjectId]);
+
 
   const updateMessages = useCallback((updater) => {
     setMessages((prev) => {
@@ -147,6 +169,25 @@ const ConsoleLayout = () => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
+// 🔥 Fetch Projects on initial load for the Dashboard
+  useEffect(() => {
+    // STOP the API call if they are not logged in
+    if (!session) return; 
+
+    const loadProjects = async () => {
+      setIsLoadingProjects(true);
+      try {
+        const data = await apiFetch("/projects", { method: "GET" });
+        setProjects(data.projects || []);
+      } catch (error) {
+        console.error("Failed to fetch projects:", error);
+      } finally {
+        setIsLoadingProjects(false);
+      }
+    };
+    loadProjects();
+  }, [session]);
+
   /* ---------------- HISTORY LOADING ---------------- */
 
   const loadChatHistory = useCallback(
@@ -169,7 +210,6 @@ const ConsoleLayout = () => {
           );
 
           const applyStatusMap = {};
-          // Maps plan_ref -> apply job_id so we can seed the correct log job id
           const applyJobIdMap = {};
           sortedMessages.forEach((m) => {
             if (
@@ -274,8 +314,6 @@ const ConsoleLayout = () => {
                   planJobId: job.job_id,
                   structured_plan: { resource_changes: [] },
                 });
-                // ai_analysis from the job row — history is always settled so
-                // isAiLoading is always false here
                 historyMsgs.push({
                   role: "bot",
                   type: "DEPLOYMENT_FAILED",
@@ -288,11 +326,9 @@ const ConsoleLayout = () => {
                 });
                 return;
               } else if (job.status === "FAILED") {
-                // Covers PLAN and APPLY failures from history
                 baseMsg.type = "DEPLOYMENT_FAILED";
                 baseMsg.errorData =
                   job.error_message || job.error || "An unknown error occurred.";
-                // ai_analysis from the job row — already settled in history
                 baseMsg.aiAnalysis = job.ai_analysis || null;
                 baseMsg.isAiLoading = false;
               }
@@ -320,10 +356,6 @@ const ConsoleLayout = () => {
 
             const inferredStatus = isTerminalPlanStatus ? "COMPLETED" : "RUNNING";
 
-            // If this plan was followed by an apply (success or failure), the
-            // apply job has richer logs (init + plan + apply stage).  Use the
-            // apply job id so the LogPanel shows the full picture instead of
-            // stopping at the plan stage.
             const applyJobId = applyJobIdMap[lastJobMsg.planJobId];
             const inferredMode = lastJobMsg.destroyMode
               ? "destroy"
@@ -359,6 +391,7 @@ const ConsoleLayout = () => {
       setMessages([]);
       setChatStarted(false);
       setConversationName("New Conversation");
+      setCostData(null); // 🔥 NEW: Clear cost data when leaving project
       sessionAttributesRef.current = {};
       restoreProjectLogs(null);
     }
@@ -373,6 +406,7 @@ const ConsoleLayout = () => {
       setSessionId(null);
       setMessages([]);
       setChatStarted(false);
+      setCostData(null); // 🔥 NEW: Clear cost data when leaving project
       sessionAttributesRef.current = {};
     } else {
       setSessionId(projId);
@@ -469,7 +503,7 @@ const ConsoleLayout = () => {
 
               const destroyChanges =
                 blueprint?.components?.map((c) => ({
-                  address: `module.${c.service}[0].aws_${c.service}_resource.this`,
+                  address: `module.${c.service}.aws_${c.service}_resource.this`,
                   change: { actions: ["delete"] },
                 })) || [];
 
@@ -561,7 +595,7 @@ const ConsoleLayout = () => {
 
               const destroyChanges =
                 blueprint?.components?.map((c) => ({
-                  address: `module.${c.service}[0].aws_${c.service}_resource.this`,
+                  address: `module.${c.service}.aws_${c.service}_resource.this`,
                   change: { actions: ["delete"] },
                 })) || [];
 
@@ -585,13 +619,10 @@ const ConsoleLayout = () => {
                     "Manual intervention may be required in the AWS Console.",
                   aiAnalysis: data.ai_analysis || null,
                   isAiLoading: !data.ai_analysis,
-                  // stable key so the AI patch can find this message
                   failJobId: jobId,
                 },
               ]);
 
-              // If ai_analysis wasn't ready yet, re-fetch the job once after
-              // a delay to pick it up and patch it into the message.
               if (!data.ai_analysis) {
                 setTimeout(async () => {
                   try {
@@ -623,7 +654,6 @@ const ConsoleLayout = () => {
               return;
             }
 
-            // Plan and apply failures
             updateMessages((prev) => {
               const updatedPrev =
                 mode === "apply"
@@ -652,14 +682,11 @@ const ConsoleLayout = () => {
                     "An unknown deployment error occurred.",
                   aiAnalysis: data.ai_analysis || null,
                   isAiLoading: !data.ai_analysis,
-                  // stable key so the AI patch can find this message
                   failJobId: jobId,
                 },
               ];
             });
 
-            // If ai_analysis wasn't ready yet, re-fetch the job once after
-            // a delay to pick it up and patch it into the message.
             if (!data.ai_analysis) {
               setTimeout(async () => {
                 try {
@@ -808,6 +835,8 @@ const ConsoleLayout = () => {
             });
 
             currentProjId = projRes.project_id;
+            // Update the projects list so it appears in the sidebar/dashboard immediately
+            setProjects((prev) => [projRes, ...prev]);
             handleProjectSelect(currentProjId, projRes.project_name, true);
           } catch (e) {
             console.error("Auto-create failed:", e);
@@ -850,6 +879,7 @@ const ConsoleLayout = () => {
       const updatedAttrs = response.sessionState?.sessionAttributes || {};
       sessionAttributesRef.current = updatedAttrs;
 
+      // 1. Get the UI payload if it exists
       let payload = {};
       try {
         payload = JSON.parse(updatedAttrs.ui_payload || "{}");
@@ -861,8 +891,11 @@ const ConsoleLayout = () => {
         setCostData(payload.cost);
       }
 
+      // 2. Safely get the text message from either the payload or Lex
       const botMessage =
-        payload.message || response.messages?.[0]?.content || "";
+        payload.message || response.messages?.content || "";
+
+      // 3. Get the Job ID from the various possible payload fields
       const currentJobId =
         payload.job_id || payload.plan_job_id || payload.apply_job_id;
 
@@ -935,16 +968,107 @@ const ConsoleLayout = () => {
   const containerClass =
     theme === "dark" ? "bg-[#050505] text-white" : "bg-zinc-50 text-zinc-900";
 
+/* ========================================================= */
+  /* MAIN RENDER LOGIC (THE TRAFFIC CONTROLLER)                  */
+  /* ========================================================= */
+
+  // 🔥 Prevent the dashboard from rendering and firing ghost requests
+  if (!session) {
+    return (
+      <div className={`flex items-center justify-center h-screen overflow-hidden ${containerClass}`}>
+        <svg className="animate-spin h-8 w-8 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+      </div>
+    );
+  }
+
+  // SCENARIO 1: No active project -> Show Dashboard
+  if (!activeProjectId) {
+    return (
+      <div className={`flex flex-col h-screen overflow-hidden ${containerClass}`}>
+        
+        {/* Simple Header for Dashboard */}
+        <header className="h-[60px] flex justify-between items-center px-6 border-b border-white/10 shrink-0">
+          <div className="flex items-center gap-4">
+            <span className="font-bold text-lg tracking-tight">CloudCrafter</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <NotificationBell />
+            <div className="flex items-center gap-3 pl-2 sm:pl-4 border-l border-white/10">
+              <div className="hidden sm:flex flex-col text-right">
+                <span className="text-xs font-bold text-zinc-200">{displayName}</span>
+                <span className="text-[10px] text-emerald-400 flex items-center justify-end gap-1.5 mt-0.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+                  Connected
+                </span>
+              </div>
+              <div className="h-8 w-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400 font-bold border border-indigo-500/30 uppercase shrink-0">
+                {displayName.charAt(0)}
+              </div>
+              <button
+                onClick={() => navigate("/logout")}
+                className="p-2 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all ml-1"
+                title="Logout"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                  <polyline points="16 17 21 12 16 7"></polyline>
+                  <line x1="21" y1="12" x2="9" y2="12"></line>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* The beautiful grid of projects */}
+        <div className="flex-1 overflow-y-auto">
+          <ProjectDashboard 
+            projects={projects}
+            userRole={userRole}
+            isLoading={isLoadingProjects}
+            onSelectProject={handleProjectSelect}
+            onCreateClick={() => setIsModalOpen(true)}
+          />
+        </div>
+
+        {/* The Popup Modal for Admins */}
+        <CreateProjectModal 
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onProjectCreated={(newProj) => {
+            setProjects([newProj, ...projects]);
+            handleProjectSelect(newProj.project_id, newProj.project_name);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // SCENARIO 2: Active Project Selected -> Show the Workspace
   return (
     <div className={`flex flex-col h-screen overflow-hidden ${containerClass}`}>
       <header className="h-[60px] flex justify-between items-center px-6 border-b border-white/10 shrink-0">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <button
             onClick={() => setSidebarOpen(true)}
             className="p-2 hover:bg-white/5 rounded-lg transition-colors"
           >
             ☰
           </button>
+          
+          {/* 🔥 NEW: Back to Dashboard Button */}
+          <button 
+            onClick={() => handleProjectSelect(null, "")}
+            className="text-zinc-400 hover:text-white flex items-center gap-1.5 text-sm font-medium transition-colors bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/10"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+            Dashboard
+          </button>
+          
+          <div className="w-px h-6 bg-white/10 mx-2"></div>
+
           <div className="flex flex-col">
             <span className="font-bold text-sm tracking-tight uppercase opacity-50">
               CloudCrafter v1.0

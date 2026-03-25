@@ -1,21 +1,18 @@
 const BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
+export const setAuthToken = (token) => {
+  if (token) {
+    localStorage.setItem("cloudcrafter_token", token);
+  }
+};
+
 export const getAuthToken = () => {
   return localStorage.getItem("cloudcrafter_token");
 };
 
-export const setAuthToken = (token) => {
-  localStorage.setItem("cloudcrafter_token", token);
-};
-
 export const clearAuthToken = () => {
-  // Clear Auth Tokens
   localStorage.removeItem("cloudcrafter_token");
   localStorage.removeItem("cloudcrafter_session");
-  
-  // Clear Project Data
-  localStorage.removeItem("cloudcrafter_project_id");
-  sessionStorage.removeItem("cc_project_id"); // 🔥 Added this to ensure clean slate
 };
 
 export const setProjectId = (id) => {
@@ -24,6 +21,18 @@ export const setProjectId = (id) => {
 
 export const getProjectId = () => {
   return localStorage.getItem("cloudcrafter_project_id");
+};
+
+export const validateSession = () => {
+  const token = getAuthToken();
+  
+  if (!token) {
+    console.error("🔴 validateSession: No token found! Bouncing user.");
+    return false;
+  }
+  
+  console.log("🟢 validateSession: Token exists! Letting user in.");
+  return true; // Just let them in! We will let the Python backend handle security.
 };
 
 export const apiFetch = async (endpoint, options = {}) => {
@@ -50,7 +59,7 @@ export const apiFetch = async (endpoint, options = {}) => {
     // 🔥 THE 401 INTERCEPTOR
     if (response.status === 401) {
       clearAuthToken();
-      window.location.href = "/signin"; 
+      // window.location.href = "/signin?expired=true"; // <-- Added query parameter
       throw new Error("Session expired. Please log in again.");
     }
 
