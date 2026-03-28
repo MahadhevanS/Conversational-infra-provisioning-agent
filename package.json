@@ -5,6 +5,7 @@
   "dependencies": {
     "@aws-sdk/client-lex-runtime-v2": "^3.971.0",
     "@aws-sdk/credential-provider-cognito-identity": "^3.971.0",
+    "@supabase/supabase-js": "^2.100.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
