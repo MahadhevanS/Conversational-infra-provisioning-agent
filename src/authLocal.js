@@ -65,7 +65,6 @@ export function signupLocal(user) {
   return true;
 }
 
-/* ---------------- LOGIN ---------------- */
 
 /* ---------------- LOGIN ---------------- */
 export const loginLocal = (email, password) => {

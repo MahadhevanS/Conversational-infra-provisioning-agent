@@ -51,6 +51,7 @@ export default function SignIn() {
 
       // Build and save session object
       const sessionData = {
+        user_id: loginData.user_id,
         email: loginData.email,
         full_name: loginData.full_name || "",
         role: loginData.role || "",

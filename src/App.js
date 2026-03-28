@@ -6,14 +6,14 @@ import ConsoleLayout from "./components/ConsoleLayout";
 import SignIn from "./pages/SignIn";
 import SignUp from "./pages/SignUp";
 import AcceptInvite from './pages/AcceptInvite';
+import { getAuthToken, clearAuthToken } from "./utils/api";
 
-import { validateSession, clearAuthToken } from "./utils/api";
+// import { validateSession, clearAuthToken } from "./utils/api";
 import "./App.css";
 
 /* ---------------- AUTH CHECK ---------------- */
-
 function isLoggedIn() {
-  return validateSession();
+  return !!getAuthToken();
 }
 
 /* ---------------- Public Landing Page ---------------- */
