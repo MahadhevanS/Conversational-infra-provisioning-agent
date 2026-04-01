@@ -1,6 +1,6 @@
 import React from "react";
 
-export default function ProjectDashboard({ projects, userRole, onSelectProject, onCreateClick, isLoading }) {
+export default function ProjectDashboard({ projects, userRole, onSelectProject, onCreateClick, isLoading, openMemberModal }) {
   return (
     <div className="min-h-screen bg-[#050505] text-white p-8 md:p-12 w-full flex flex-col items-center animate-in fade-in duration-500 overflow-y-auto">
       
@@ -59,6 +59,17 @@ export default function ProjectDashboard({ projects, userRole, onSelectProject, 
 
               {proj.access_level === "cloud_architect" && (
                 <span className="text-xs text-zinc-500 bg-white/5 px-2 py-1 rounded-md">Guest Access</span>
+              )}
+              {userRole === "admin" && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openMemberModal(proj.project_id);
+                  }}
+                  className="absolute top-2 right-2 text-xs bg-white/10 px-2 py-1 rounded hover:bg-white/20"
+                >
+                  Members
+                </button>
               )}
             </div>
 

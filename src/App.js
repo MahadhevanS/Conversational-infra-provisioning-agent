@@ -6,6 +6,7 @@ import ConsoleLayout from "./components/ConsoleLayout";
 import SignIn from "./pages/SignIn";
 import SignUp from "./pages/SignUp";
 import AcceptInvite from './pages/AcceptInvite';
+import ApproveDestroy from "./pages/ApproveDestroy";
 import { getAuthToken, clearAuthToken } from "./utils/api";
 
 // import { validateSession, clearAuthToken } from "./utils/api";
@@ -75,6 +76,7 @@ export default function App() {
       <Route path="*" element={<Navigate to="/" replace />} />
 
       <Route path="/join/:token" element={<AcceptInvite />} />
+      <Route path="/approve-destroy/:token" element={<ApproveDestroy />} />
     </Routes>
   );
 }
