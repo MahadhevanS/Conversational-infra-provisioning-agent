@@ -1,70 +1,264 @@
-# Getting Started with Create React App
+# CloudCrafter — Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A **React** single-page application that provides a conversational interface for deploying and managing AWS cloud infrastructure. Users describe what they want in plain English; the app handles the rest via AWS Lex, Terraform, and Infracost.
 
-## Available Scripts
+---
 
-In the project directory, you can run:
+## Features
 
-### `npm start`
+| Feature | Description |
+|---|---|
+| 💬 **Conversational IaC** | Chat with AWS Lex to describe, build, and modify infrastructure blueprints |
+| 📋 **Terraform Plan Viewer** | Rich diff-style view of resources to be created, changed, or destroyed |
+| 💰 **Live Cost Estimation** | One-click Infracost estimates before committing to a deploy |
+| 🚀 **One-click Deploy** | Approve a plan and watch real-time Terraform logs stream in |
+| 🔴 **Infrastructure Destroy** | Safely destroy environments with RBAC approval for architects |
+| 🤖 **AI Failure Analysis** | Gemini-powered root cause analysis with step-by-step fix suggestions |
+| 🔔 **Audio Notifications** | Sound alerts on deployment success, failure, and plan completion |
+| 👥 **Multi-user Projects** | Invite Cloud Architects to collaborate on projects |
+| 📡 **Supabase Realtime** | Live chat and job status updates without manual refresh |
+| 🌗 **Dark / Light Theme** | Toggle between dark and light modes |
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+---
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Architecture Overview
 
-### `npm test`
+```
+User
+ │
+ ▼
+React SPA (Create React App)
+ ├── AWS Lex V2 (via AWS SDK)   — natural language understanding
+ ├── Supabase JS Client          — auth, database, realtime subscriptions
+ └── FastAPI Backend             — job orchestration, Terraform, Infracost
+```
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+### Key Component Map
 
-### `npm run build`
+```
+src/
+├── components/
+│   ├── ConsoleLayout.js        # Main shell — routing, polling, Lex integration
+│   ├── ChatFeed.js             # Message list renderer
+│   ├── CommandInput.js         # Text input + send button
+│   ├── Sidebar.js              # Project list + navigation
+│   ├── TerraformPlanView.js    # Plan diff viewer with cost + approve/discard
+│   ├── DeploymentFailureView.js # Failure card with AI analysis
+│   ├── DeploymentSuccessView.js # Success card with outputs
+│   ├── LandingPage.js          # Public marketing page
+│   └── CostModal.js            # Cost breakdown modal
+├── pages/
+│   ├── LogPanel.jsx            # Real-time Terraform log streaming panel
+│   ├── ProjectDashboard.jsx    # Per-project dashboard
+│   ├── CreateProjectModal.jsx  # New project creation with invite flow
+│   ├── ProjectMembersModal.jsx # Manage project members
+│   ├── SignIn.jsx              # Login form
+│   ├── SignUp.jsx              # Registration with IAM role input
+│   ├── AcceptInvite.jsx        # Invitation acceptance flow
+│   └── ApproveDestroy.jsx      # Admin destroy approval page
+├── hooks/
+│   └── useSupabaseRealtime.js  # Realtime insert/update hooks
+└── utils/
+    └── api.js                  # Authenticated fetch wrapper
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+---
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Getting Started
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### Prerequisites
 
-### `npm run eject`
+- Node.js 18+ and npm
+- A running instance of the [CloudCrafter Backend](../Conversational-infra-provisioning-agent-backend)
+- AWS Lex V2 bot with the following intents:
+  - `CreateInfraIntent`
+  - `ModifyInfraIntent`
+  - `TerminateInfraIntent`
+  - `StatusInfraIntent`
+- AWS Cognito Identity Pool (for unauthenticated Lex access)
+- Supabase project
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+### 1. Clone the repository
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```bash
+git clone <repo-url>
+cd Conversational-infra-provisioning-agent
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+### 2. Install dependencies
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+```bash
+npm install
+```
 
-## Learn More
+### 3. Configure environment variables
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+Create a `.env` file in the root directory:
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+```env
+# FastAPI backend URL
+REACT_APP_API_BASE_URL=http://localhost:8000
 
-### Code Splitting
+# AWS Lex V2
+REACT_APP_AWS_REGION=us-east-1
+REACT_APP_LEX_BOT_ID=<your-lex-bot-id>
+REACT_APP_LEX_BOT_ALIAS_ID=<your-lex-alias-id>
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+# AWS Cognito Identity Pool (for Lex unauthenticated access)
+REACT_APP_COGNITO_IDENTITY_POOL_ID=us-east-1:<your-pool-id>
 
-### Analyzing the Bundle Size
+# Supabase
+REACT_APP_SUPABASE_URL=https://<your-project>.supabase.co
+REACT_APP_SUPABASE_ANON_KEY=<your-anon-key>
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+### 4. Start the development server
 
-### Making a Progressive Web App
+```bash
+npm start
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+The app will be available at `http://localhost:3000`.
 
-### Advanced Configuration
+### 5. Production build
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+```bash
+npm run build
+```
 
-### Deployment
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## Page / Route Reference
 
-### `npm run build` fails to minify
+| Route | Component | Description |
+|---|---|---|
+| `/` | `LandingPage` | Public marketing page |
+| `/signin` | `SignIn` | Email + password login |
+| `/signup` | `SignUp` | Registration with AWS IAM role ARN |
+| `/console` | `ConsoleLayout` | Main application shell |
+| `/invite/:token` | `AcceptInvite` | Accept a project collaboration invite |
+| `/approve-destroy/:token` | `ApproveDestroy` | Admin destroy approval page |
+| `/logout` | — | Clears session and redirects to `/` |
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+---
+
+## Conversation Flow
+
+```
+User types message
+      │
+      ▼
+AWS Lex V2 (NLU)
+      │
+      ▼
+Lex Webhook (FastAPI /lex-webhook)
+      │
+      ├── CreateInfraIntent  → Build blueprint → Ask to plan
+      ├── ModifyInfraIntent  → Update blueprint (add/remove/change services)
+      └── TerminateInfraIntent → Destroy confirmation flow
+      │
+      ▼
+Session attributes returned to frontend
+      │
+      ├── PLAN_STARTED   → Poll /status → Show TerraformPlanView
+      ├── DESTROY_STARTED → Poll /status → Show result
+      └── DESTROY_APPROVAL_PENDING → Notify user to wait
+```
+
+---
+
+## State Management
+
+There is no external state library. State is managed via:
+
+- **`useState` / `useRef`** — local component state for messages, projects, UI toggles
+- **`chatCache` ref** — in-memory cache of chat history per project (avoids re-fetching on project switch)
+- **`sessionAttributesRef`** — holds Lex session state (blueprint, conversation_state) between turns
+- **`projectLogsRef`** — tracks which job is active in the log panel per project
+- **Supabase Realtime** — live subscriptions on `jobs` and `projects` tables
+
+---
+## Auth & Session
+
+- Auth is handled by **Supabase Auth** (email + password).
+- On login, the server returns a JWT and user metadata which is stored in `localStorage` as `cloudcrafter_session`.
+- The `apiFetch` utility in `utils/api.js` automatically attaches the `Authorization: Bearer <token>` header to every API call.
+- On token expiry (401 response), the app clears the session and redirects to `/signin`.
+
+---
+
+## Notifications
+
+Audio notifications are played (via the Web Audio API) when:
+- A **Terraform plan** completes
+- A **deployment** succeeds or fails
+- A **cost estimate** finishes
+
+The audio file is served from `/public/notification.wav`.
+
+---
+
+## Tech Stack
+
+| Technology | Version |
+|---|---|
+| React | 19.x |
+| React Router | 7.x |
+| AWS SDK (Lex V2) | 3.x |
+| AWS SDK (Cognito Identity) | 3.x |
+| Supabase JS | 2.x |
+| Tailwind CSS | (configured via `tailwind.config.js`) |
+| Create React App | 5.0.1 |
+
+---
+
+## Supabase Tables Used
+
+| Table | Purpose |
+|---|---|
+| `projects` | Project metadata and ownership |
+| `jobs` | Terraform job tracking (status, logs, AI analysis) |
+| `chat_messages` | Persistent per-project chat history |
+| `user_profiles` | Roles (`admin` / `cloud_architect`) and display names |
+| `aws_credentials` | IAM Role ARNs per user |
+| `project_members` | Many-to-many: users → projects |
+| `project_invitations` | Pending email invitations |
+| `destroy_approvals` | Pending destroy requests awaiting admin approval |
+
+---
+
+## Running Tests
+
+```bash
+npm test
+```
+
+Uses React Testing Library + Jest.
+
+---
+
+## Project Structure
+
+```
+Conversational-infra-provisioning-agent/
+├── public/
+│   ├── index.html
+│   └── notification.wav      # Audio notification sound
+├── src/
+│   ├── components/           # UI components
+│   ├── pages/                # Route-level page components
+│   ├── hooks/                # Custom React hooks (Supabase Realtime)
+│   ├── utils/                # API fetch wrapper, auth helpers
+│   ├── App.js                # Route definitions
+│   ├── index.js              # React entry point
+│   └── index.css             # Global styles
+├── .env                      # Environment variables (not committed)
+├── tailwind.config.js
+└── package.json
+```
+
+---
+
+## License
+
+MIT
