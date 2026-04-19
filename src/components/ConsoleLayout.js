@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   LexRuntimeV2Client,
@@ -16,7 +16,6 @@ import CommandInput from "./CommandInput";
 import { apiFetch } from "../utils/api";
 import { getAuthToken } from "../utils/api";
 import LogPanel from "../pages/LogPanel";
-import NotificationBell from "./NotificationBell";
 import ProjectDashboard from "../pages/ProjectDashboard";
 import CreateProjectModal from "../pages/CreateProjectModal";
 import { useRealtimeInsert, useRealtimeUpdate } from "../hooks/useSupabaseRealtime";
@@ -72,9 +71,6 @@ const ConsoleLayout = () => {
   const projectLogsRef = useRef({});
 
   const [logPanelOpen,    setLogPanelOpen]    = useState(false);
-  const [activeLogJobId,  setActiveLogJobId]  = useState(null);
-  const [activeLogMode,   setActiveLogMode]   = useState(null);
-  const [activeLogStatus, setActiveLogStatus] = useState(null);
 
   const [projects,          setProjects]          = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
@@ -84,6 +80,20 @@ const ConsoleLayout = () => {
 
   const planTimeoutRef  = useRef(null);
   const applyIntervalRef = useRef(null);
+  const actionHandlersRef = useRef({
+    triggerCost: null,
+    triggerApply: null,
+    discardPlan: null,
+  });
+
+  const playNotificationSound = () => {
+    try {
+      const audio = new Audio("/notification.wav");
+      audio.play();
+    } catch (e) {
+      console.warn("Notification sound failed:", e);
+    }
+  };
 
   const openMemberModal = (projectId) => {
     setSelectedProjectId(projectId);
@@ -123,7 +133,7 @@ const ConsoleLayout = () => {
     if (!token) {
       navigate("/signin");
     }
-  }, []);
+  }, [navigate]);
   
   /* ── Sync ref ────────────────────────────────────────────────────────── */
 
@@ -136,6 +146,19 @@ const ConsoleLayout = () => {
   const updateMessages = useCallback((updater) => {
     setMessages((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
+
+      // 🔊 Play sound when a terminal-status message is appended
+      if (Array.isArray(prev) && Array.isArray(next) && next.length > prev.length) {
+        const newMsg = next[next.length - 1];
+        if (
+          newMsg?.type === "DEPLOYMENT_SUCCESS" ||
+          newMsg?.type === "DEPLOYMENT_FAILED" ||
+          newMsg?.type === "PLAN_DISPLAY"
+        ) {
+          playNotificationSound();
+        }
+      }
+
       if (activeProjectIdRef.current) {
         chatCache.current[activeProjectIdRef.current] = next;
       }
@@ -191,26 +214,11 @@ const ConsoleLayout = () => {
     if (projId && jobId) {
       projectLogsRef.current[projId] = { jobId, mode, status: status || "RUNNING" };
     }
-    setActiveLogJobId(jobId);
-    setActiveLogMode(mode);
-    setActiveLogStatus(status || "RUNNING");
     setLogPanelOpen(true);
   }, []);
 
   const restoreProjectLogs = useCallback((projId) => {
     setLogPanelOpen(false);
-    setActiveLogJobId(null);
-    setActiveLogMode(null);
-    setActiveLogStatus(null);
-
-    if (projId) {
-      const saved = projectLogsRef.current[projId];
-      if (saved) {
-        setActiveLogJobId(saved.jobId);
-        setActiveLogMode(saved.mode);
-        setActiveLogStatus(saved.status);
-      }
-    }
   }, []);
 
   /* ── Realtime: new projects ──────────────────────────────────────────── */
@@ -228,16 +236,32 @@ const ConsoleLayout = () => {
     "jobs",
     (updatedJob) => {
       if (updatedJob.project_id !== activeProjectId) return;
+
+      // Update log panel status on terminal job states
       if (updatedJob.status === "COMPLETED" || updatedJob.status === "FAILED") {
-        setActiveLogStatus(updatedJob.status);
         const projId = activeProjectIdRef.current;
         if (projId && projectLogsRef.current[projId]) {
           projectLogsRef.current[projId].status = updatedJob.status;
         }
       }
+
+      // 🔥 CRITICAL FIX: handle AI analysis arrival
+      if (updatedJob.ai_analysis) {
+        updateMessages((prev) =>
+          prev.map((msg) =>
+            msg.jobId === updatedJob.job_id
+              ? {
+                  ...msg,
+                  aiAnalysis: updatedJob.ai_analysis,
+                  isAiLoading: false,
+                }
+              : msg
+          )
+        );
+      }
     },
     activeProjectId ? `project_id=eq.${activeProjectId}` : null,
-    [activeProjectId]
+    [activeProjectId, updateMessages]
   );
 
   /* ── Realtime: incoming chat messages from other users ───────────────── */
@@ -252,7 +276,7 @@ const ConsoleLayout = () => {
     if (row.sender_name === currentUserName) return;
 
     const newMsg = {
-      role: row.sender?.toUpperCase() === "USER" ? "user" : "bot",
+      role: row.sender?.toUpperCase() === "user" ? "user" : "bot",
       text: row.message_text,
       senderName: row.sender_name,
       senderRole: row.sender_role,
@@ -314,7 +338,7 @@ const ConsoleLayout = () => {
         const historyMsgs = [];
 
         sorted.forEach((m) => {
-          const isUser = m.sender?.toUpperCase() === "USER";
+          const isUser = m.sender?.toLowerCase() === "user";
 
           // ── Base message shape including group-chat sender fields ──
           const baseMsg = {
@@ -384,18 +408,28 @@ const ConsoleLayout = () => {
                 planJobId: job.job_id, structured_plan: { resource_changes: [] },
               });
               historyMsgs.push({
-                role: "bot", senderName: "CloudCrafter", senderRole: "bot",
-                type: "DEPLOYMENT_FAILED", text: "Destruction failed.",
+                role: "bot",
+                senderName: "CloudCrafter",
+                senderRole: "bot",
+                type: "DEPLOYMENT_FAILED",
+                text: "Destruction failed.",
                 errorData: job.error_message || "Manual intervention may be required.",
-                aiAnalysis: job.ai_analysis || null, isAiLoading: false,
+
+                // ✅ FIX 1: correct AI handling
+                aiAnalysis: job.ai_analysis || null,
+                isAiLoading: !job.ai_analysis,   // 🔥 IMPORTANT FIX
+
+                // ✅ FIX 2: add jobId for realtime matching
+                jobId: job.job_id,
               });
               return;
 
             } else if (job.status === "FAILED") {
-              baseMsg.type      = "DEPLOYMENT_FAILED";
-              baseMsg.errorData = job.error_message || job.error || "An unknown error occurred.";
+              baseMsg.type        = "DEPLOYMENT_FAILED";
+              baseMsg.errorData   = job.error_message || job.error || "An unknown error occurred.";
               baseMsg.aiAnalysis  = job.ai_analysis || null;
-              baseMsg.isAiLoading = false;
+              baseMsg.isAiLoading = !job.ai_analysis; 
+              baseMsg.jobId       = job.job_id;
             }
           }
 
@@ -498,7 +532,6 @@ const ConsoleLayout = () => {
           if (data.status === "COMPLETED") {
             setBotStatus("");
             stopPolling();
-            setActiveLogStatus("COMPLETED");
 
             const currentPid = activeProjectIdRef.current;
             if (currentPid && projectLogsRef.current[currentPid]) {
@@ -514,9 +547,9 @@ const ConsoleLayout = () => {
                   type: "PLAN_DISPLAY",
                   structured_plan: data.structured_plan,
                   planJobId: jobId,
-                  onCalculateCost: () => triggerCost(jobId),
-                  onApprove:       () => triggerApply(jobId),
-                  onDiscard:       () => discardPlan(jobId),
+                  onCalculateCost: () => actionHandlersRef.current.triggerCost?.(jobId),
+                  onApprove:       () => actionHandlersRef.current.triggerApply?.(jobId),
+                  onDiscard:       () => actionHandlersRef.current.discardPlan?.(jobId),
                 },
               ]);
             }
@@ -530,6 +563,7 @@ const ConsoleLayout = () => {
                 )
               );
               setCostData(data.cost_summary);
+              playNotificationSound();
             }
 
             if (mode === "destroy") {
@@ -597,7 +631,6 @@ const ConsoleLayout = () => {
           } else if (data.status === "FAILED") {
             setBotStatus("");
             stopPolling();
-            setActiveLogStatus("FAILED");
 
             const currentPid = activeProjectIdRef.current;
             if (currentPid && projectLogsRef.current[currentPid]) {
@@ -629,7 +662,7 @@ const ConsoleLayout = () => {
                   errorData: data.error || "Manual intervention may be required in the AWS Console.",
                   aiAnalysis: data.ai_analysis || null,
                   isAiLoading: !data.ai_analysis,
-                  failJobId: jobId,
+                  jobId: jobId,
                 },
               ]);
 
@@ -640,7 +673,7 @@ const ConsoleLayout = () => {
                     if (updated.ai_analysis) {
                       updateMessages((prev) =>
                         prev.map((m) =>
-                          m.failJobId === jobId
+                          m.jobId === jobId
                             ? { ...m, aiAnalysis: updated.ai_analysis, isAiLoading: false }
                             : m
                         )
@@ -679,7 +712,7 @@ const ConsoleLayout = () => {
                   errorData: data.error || data.error_message || "An unknown deployment error occurred.",
                   aiAnalysis:  data.ai_analysis || null,
                   isAiLoading: !data.ai_analysis,
-                  failJobId:   jobId,
+                  jobId:       jobId,
                 },
               ];
             });
@@ -691,7 +724,7 @@ const ConsoleLayout = () => {
                   if (updated.ai_analysis) {
                     updateMessages((prev) =>
                       prev.map((m) =>
-                        m.failJobId === jobId
+                        m.jobId === jobId
                           ? { ...m, aiAnalysis: updated.ai_analysis, isAiLoading: false }
                           : m
                       )
@@ -700,7 +733,6 @@ const ConsoleLayout = () => {
                 } catch {}
               }, 5000);
             }
-
           } else {
             const delay = mode === "apply" || mode === "destroy" ? 4000 : 3000;
             planTimeoutRef.current = setTimeout(checkStatus, delay);
@@ -718,7 +750,7 @@ const ConsoleLayout = () => {
 
   /* ── Action triggers ─────────────────────────────────────────────────── */
 
-  const discardPlan = async (planJobId) => {
+  const discardPlan = useCallback(async (planJobId) => {
     setCostData(null);
     updateMessages((prev) =>
       prev.map((msg) =>
@@ -729,9 +761,9 @@ const ConsoleLayout = () => {
     );
     try { await apiFetch(`/jobs/${planJobId}/discard`, { method: "POST" }); }
     catch (e) { console.error("Failed to discard job:", e); }
-  };
+  }, [updateMessages]);
 
-  const triggerCost = async (planJobId) => {
+  const triggerCost = useCallback(async (planJobId) => {
     try {
       setBotStatus("Calculating infrastructure cost...");
       const data = await apiFetch("/cost", {
@@ -740,9 +772,9 @@ const ConsoleLayout = () => {
       });
       pollStatus(data.job_id, "cost", planJobId);
     } catch { setBotStatus(""); }
-  };
+  }, [currentUserId, pollStatus]);
 
-  const triggerApply = async (planJobId) => {
+  const triggerApply = useCallback(async (planJobId) => {
     const blueprint = (() => {
       try { return JSON.parse(sessionAttributesRef.current.infra_blueprint || "null"); }
       catch { return null; }
@@ -766,7 +798,15 @@ const ConsoleLayout = () => {
       openLogs(data.apply_job_id, "apply", "RUNNING");
       pollStatus(data.apply_job_id, "apply", planJobId);
     } catch { setBotStatus(""); }
-  };
+  }, [currentUserId, openLogs, pollStatus]);
+
+  useEffect(() => {
+    actionHandlersRef.current = {
+      triggerCost,
+      triggerApply,
+      discardPlan,
+    };
+  }, [discardPlan, triggerApply, triggerCost]);
 
   /* ── Lex handler ─────────────────────────────────────────────────────── */
 
@@ -778,6 +818,7 @@ const ConsoleLayout = () => {
 
     try {
       if (!isSystemEvent) {
+
         if (!currentProjId) {
           try {
             const newProjTitle = text.length > 30 ? text.substring(0, 30) + "..." : text;
@@ -793,7 +834,7 @@ const ConsoleLayout = () => {
           }
         }
 
-        // Optimistic message with sender info
+        // Optimistic user message with sender info
         updateMessages((prev) => [
           ...prev,
           { role: "user", text, senderName: displayName, senderRole: userRole },
@@ -835,13 +876,35 @@ const ConsoleLayout = () => {
       const updatedAttrs = response.sessionState?.sessionAttributes || {};
       sessionAttributesRef.current = updatedAttrs;
 
+      // ─────────────────────────────────────────────────────────────────────
+      // FIX: Extract bot message correctly.
+      //
+      // Lex V2 RecognizeText returns:
+      //   response.messages → Array<{ content: string, contentType: string }>
+      //
+      // The old code used `response.messages?.content` which is ALWAYS
+      // undefined because `messages` is an array, not an object.
+      //
+      // Priority order:
+      //   1. payload.message  — set by lex.py's build_response() into ui_payload
+      //   2. response.messages[0].content — Lex V2 native messages array
+      //   3. Empty string fallback (will be skipped for display/save)
+      // ─────────────────────────────────────────────────────────────────────
       let payload = {};
       try { payload = JSON.parse(updatedAttrs.ui_payload || "{}"); }
       catch { payload = {}; }
 
       if (payload.cost) setCostData(payload.cost);
 
-      const botMessage   = payload.message || response.messages?.content || "";
+      // 1. Prefer message from ui_payload (always set by build_response)
+      // 2. Fall back to the first Lex native message in the messages array
+      const lexNativeMessage =
+        Array.isArray(response.messages) && response.messages.length > 0
+          ? response.messages[0].content || ""
+          : "";
+
+      const botMessage = payload.message || lexNativeMessage;
+
       const currentJobId = payload.job_id || payload.plan_job_id || payload.apply_job_id;
       const isDestroyFlow = payload.type === "DESTROY_STARTED";
 
@@ -873,19 +936,23 @@ const ConsoleLayout = () => {
         ]);
         openLogs(currentJobId, "destroy", "RUNNING");
         pollStatus(currentJobId, "destroy");
-      } else if(payload.type === "DESTROY_APPROVAL_PENDING"){
+      } else if (payload.type === "DESTROY_APPROVAL_PENDING") {
         updateMessages((prev) => [
-            ...prev,
-            {
-              role:       "bot",
-              senderName: "CloudCrafter",
-              senderRole: "bot",
-              text:       botMessage,
-              type:       "DESTROY_APPROVAL_PENDING",
-            },
-          ]);
+          ...prev,
+          {
+            role:       "bot",
+            senderName: "CloudCrafter",
+            senderRole: "bot",
+            text:       botMessage,
+            type:       "DESTROY_APPROVAL_PENDING",
+          },
+        ]);
       }
 
+      // ─────────────────────────────────────────────────────────────────────
+      // FIX: Only save to DB if botMessage is non-empty.
+      // Previously an empty string would POST a blank chat message record.
+      // ─────────────────────────────────────────────────────────────────────
       if (botMessage && currentProjId) {
         apiFetch("/chats", {
           method: "POST",
@@ -897,6 +964,7 @@ const ConsoleLayout = () => {
           }),
         }).catch(() => {});
       }
+
     } catch (error) {
       console.error("talkToLex failed:", error);
       updateMessages((prev) => [
@@ -938,7 +1006,6 @@ const ConsoleLayout = () => {
         <header className="h-[60px] flex justify-between items-center px-6 border-b border-white/10 shrink-0">
           <span className="font-bold text-lg tracking-tight">CloudCrafter</span>
           <div className="flex items-center gap-4">
-            <NotificationBell />
             <div className="flex items-center gap-3 pl-2 sm:pl-4 border-l border-white/10">
               <div className="hidden sm:flex flex-col text-right">
                 <span className="text-xs font-bold text-zinc-200">{displayName}</span>
@@ -963,7 +1030,6 @@ const ConsoleLayout = () => {
 
         <div className="flex-1 overflow-y-auto">
           <ProjectDashboard
-            
             projects={projects}
             userRole={userRole}
             isLoading={isLoadingProjects}
@@ -1033,13 +1099,10 @@ const ConsoleLayout = () => {
               <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
             </svg>
             Logs
-            {/* Show pulse if bot is currently doing something */}
             {botStatus !== "" && (
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             )}
           </button>
-
-          <NotificationBell />
 
           <div className="flex items-center gap-3 pl-2 sm:pl-4 border-l border-white/10">
             <div className="hidden sm:flex flex-col text-right">
@@ -1065,17 +1128,9 @@ const ConsoleLayout = () => {
 
       <div className="flex flex-1 relative overflow-hidden">
         <LogPanel
-          isOpen={logPanelOpen}
-          onClose={() => setLogPanelOpen(false)}
-          jobId={activeLogJobId}
-          jobMode={activeLogMode}
-          jobStatus={activeLogStatus}
-          theme={theme}
-        />
-        <LogPanel
             isOpen={logPanelOpen}
             onClose={() => setLogPanelOpen(false)}
-            projectId={activeProjectId} // Pass Project ID instead of Job ID
+            projectId={activeProjectId}
             theme={theme}
           />
 

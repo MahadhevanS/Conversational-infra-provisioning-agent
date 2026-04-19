@@ -163,7 +163,16 @@ const ChatFeed = ({
 
                       {msg.type === "DEPLOYMENT_FAILED" && msg.errorData && (
                         <div className="mt-4 w-full">
-                          <DeploymentFailureView failureData={msg.errorData} aiAnalysis={msg.aiAnalysis || null} isAiLoading={msg.isAiLoading || false} theme={theme} />
+                          <DeploymentFailureView
+                            failureData={msg.errorData}
+                            aiAnalysis={
+                              // Live polling sets msg.aiAnalysis directly;
+                              // history load surfaces it via job_details (from get_chat_history)
+                              msg.aiAnalysis || msg.job_details?.ai_analysis || null
+                            }
+                            isAiLoading={msg.isAiLoading}
+                            theme={theme}
+                          />
                         </div>
                       )}
 
